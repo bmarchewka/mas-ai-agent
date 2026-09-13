@@ -1,4 +1,5 @@
-# mas-agent
+<img width="100%" alt="bot2_MAS_AI_Agent" src="https://github.com/user-attachments/assets/8f3664d9-e96c-47d2-a52c-a396e9b1039e" />
+
 
 Extracts the **IBM Maximo (MAS) Manage vendor baseline** — the SMP folder contents, the
 Graphite application definitions, and the database schema — straight from IBM's published
