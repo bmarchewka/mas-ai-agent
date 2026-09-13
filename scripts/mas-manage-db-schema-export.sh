@@ -138,12 +138,65 @@ EOF
   printf '%s' "${out}"
 }
 
+# ---------------------------------------------------------------------------
+# Optionally load secrets (e.g. MAS_DB_PASSWORD) from a gitignored secrets.env
+# in the repo root, so the DB password need never live in config.yaml. Anything
+# it defines is exported into the environment for resolve_db_password() below.
+# ---------------------------------------------------------------------------
+SECRETS_FILE="${REPO_ROOT}/secrets.env"
+if [[ -f "${SECRETS_FILE}" ]]; then
+  set -a                       # auto-export every variable the file assigns
+  # shellcheck disable=SC1090
+  source "${SECRETS_FILE}"
+  set +a
+fi
+
+# Resolve the DB password WITHOUT requiring plaintext in config.yaml.
+# Precedence:
+#   1. MAS_DB_PASSWORD environment variable (incl. anything set in secrets.env).
+#   2. masManage.database.password in config.yaml, which may be:
+#        env:VARNAME    -> value of that environment variable
+#        file:/path     -> contents of that file (surrounding whitespace trimmed;
+#                          a leading ~ is expanded to $HOME)
+#        cmd:<command>  -> stdout of running <command> (trimmed) — e.g. an OS
+#                          keychain lookup:
+#                          cmd:security find-generic-password -s mas-db -w   (macOS)
+#                          cmd:secret-tool lookup service mas-db             (Linux)
+#        <literal>      -> used verbatim (backward compatible)
+# The resolved value only ever reaches the container via the 0600 env file
+# (see below), never the command line.
+resolve_db_password() {
+  if [[ -n "${MAS_DB_PASSWORD:-}" ]]; then
+    printf '%s' "${MAS_DB_PASSWORD}"
+    return 0
+  fi
+  local raw
+  raw="$(parse_value '.masManage.database.password')"
+  case "${raw}" in
+    env:*)
+      local var="${raw#env:}"
+      printf '%s' "${!var:-}"
+      ;;
+    file:*)
+      local path="${raw#file:}"
+      path="${path/#\~/${HOME}}"
+      [[ -f "${path}" ]] && printf '%s' "$(<"${path}")"
+      ;;
+    cmd:*)
+      bash -c "${raw#cmd:}" 2>/dev/null || true
+      ;;
+    *)
+      printf '%s' "${raw}"
+      ;;
+  esac
+}
+
 DB_TYPE_RAW="$(parse_value '.masManage.database.type')"
 DB_HOST="$(parse_value '.masManage.database.host')"
 DB_PORT="$(parse_value '.masManage.database.port')"
 DB_NAME="$(parse_value '.masManage.database.name')"
 DB_USER="$(parse_value '.masManage.database.username')"
-DB_PASS="$(parse_value '.masManage.database.password')"
+DB_PASS="$(resolve_db_password)"
 DB_SCHEMA="$(parse_value '.masManage.database.schema')"
 DATA_TABLES="$(parse_selector '.masManage.dataTables')"
 SCHEMA_TABLES="$(parse_selector '.masManage.schemaTables')"
@@ -152,6 +205,8 @@ if [[ -z "${SCHEMA_TABLES}" ]]; then SCHEMA_TABLES="*"; fi
 
 if [[ -z "${DB_TYPE_RAW}" || -z "${DB_HOST}" || -z "${DB_PORT}" || -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASS}" || -z "${DB_SCHEMA}" ]]; then
   echo "ERROR: could not read masManage.database fields (type, host, port, name, username, password, schema) from ${CONFIG}" >&2
+  echo "       The password can be supplied via the MAS_DB_PASSWORD env var (or a gitignored secrets.env)," >&2
+  echo "       or as masManage.database.password using a literal or an env:VAR / file:/path / cmd:<command> reference." >&2
   exit 1
 fi
 

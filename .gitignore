@@ -1,2 +1,5 @@
 MANAGE/
 tmp/
+# Local secrets (DB password etc.) — never commit. Template: secrets.env.example
+secrets.env
+.env

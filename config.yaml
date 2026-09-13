@@ -3,7 +3,7 @@
 # switching engines needs no other change.
 #   engine: docker | podman   (default: docker when this section is omitted)
 container:
-  engine: podman
+  engine: docker
 # MAS Manage image references
 # Set catalog.operatorImage and catalog.operatorTag to target a specific operator catalog release.
 # The resolve script will populate status.manageadmin automatically.
@@ -12,14 +12,20 @@ catalog:
   operatorTag: v9-260827-amd64
 masManage:
   database:
-    host: 63.180.240.251
+    host: 3.67.95.64
     port: 50000
     # engine options: mssql | db2 | oracle
     type: db2
     name: maxdev76
     schema: maximo
     username: maximo
-    password: ********
+    # DB password. Keep the secret OUT of this tracked file — prefer one of:
+    #   env:VARNAME    -> read from that environment variable (default below)
+    #   file:/path     -> read from a file (~ is expanded)
+    #   cmd:<command>  -> run a command and use its output (e.g. an OS keychain)
+    # A bare literal still works but is discouraged. The MAS_DB_PASSWORD env var
+    # (e.g. set in the gitignored secrets.env) overrides whatever is set here.
+    password: env:MAS_DB_PASSWORD
   # Which tables' schema (DDL) to export in step 5.
   #   "*"                            -> all tables (default; also if omitted)
   #   [WORKORDER, ASSET, LOCATIONS]  -> only these tables (YAML list)

@@ -93,7 +93,7 @@ masManage:
     name: masdev
     schema: maximo
     username: maximo
-    password: ********
+    password: env:MAS_DB_PASSWORD    # see "Where to put the password" below
 ```
 
 | Field | Meaning |
@@ -103,10 +103,36 @@ masManage:
 | `type` | Engine — one of `mssql` (SQL Server), `db2` (IBM DB2), `oracle` (Oracle). Picks the driver automatically. |
 | `name` | Database name (SQL Server / DB2) or Oracle **service name**. |
 | `schema` | Schema whose tables/views to export (Maximo is usually `maximo` / `MAXIMO`). DB2 and Oracle are folded to upper case automatically. |
-| `username` / `password` | Read credentials for reflecting the schema. |
+| `username` | Read user for reflecting the schema. |
+| `password` | The read user's password — **don't put the real secret here**; see below. |
 
-> **Credentials:** `config.yaml` holds the DB password in plain text. Treat this file as sensitive —
-> avoid committing real production credentials, or keep them in a copy that stays out of version control.
+#### Where to put the password (keep the secret out of `config.yaml`)
+
+`config.yaml` is tracked in git, so the DB password should **not** be stored there in plain text.
+Step 5 resolves the password in this order:
+
+1. **`MAS_DB_PASSWORD` environment variable** — wins if set. The script also auto-loads a
+   **gitignored `secrets.env`** from the repo root, so the easiest setup is:
+
+   ```bash
+   cp secrets.env.example secrets.env      # then edit: MAS_DB_PASSWORD=...
+   ```
+
+   (Or just `export MAS_DB_PASSWORD=...` in your shell / CI secret store.)
+
+2. **`masManage.database.password` in `config.yaml`**, which may be a *reference* rather than a
+   literal:
+
+   | Value | Resolves to |
+   |-------|-------------|
+   | `env:VARNAME` | the value of that environment variable (recommended default: `env:MAS_DB_PASSWORD`) |
+   | `file:/path/to/secret` | the contents of that file (`~` is expanded; surrounding whitespace trimmed) |
+   | `cmd:<command>` | the command's output — e.g. an OS keychain: `cmd:security find-generic-password -s mas-db -w` (macOS) or `cmd:secret-tool lookup service mas-db` (Linux). Quote the whole value in YAML if it contains `:` followed by a space. |
+   | *(a bare literal)* | used as-is — **backward compatible**, but discouraged for real secrets |
+
+Whichever source is used, the resolved password is only ever written to a `chmod 600` env file
+that is mounted into the export container — it never appears on the `docker`/`podman` command line
+or in the host process list.
 
 #### `masManage.schemaTables` — which tables' schema to export
 

@@ -29,7 +29,8 @@ per-tool copy is needed.
 - `scripts/mas-manage-resolve-image.sh` — resolves manageadmin image from operator catalog (step 2)
 - `scripts/mas-manage-SMP-extract.sh` — copies the MAS Manage SMP folder from the image (step 3)
 - `scripts/mas-manage-graphite-extract.sh` — extracts graphite node_modules/@maximo from container (step 4)
-- `scripts/mas-manage-db-schema-export.sh` — exports Maximo DB table/view DDL (for the tables selected by `masManage.schemaTables`), plus full row data (CSV) for the tables listed in `masManage.dataTables`, to MANAGE/DBSCHEMA/ (step 5)
+- `scripts/mas-manage-db-schema-export.sh` — exports Maximo DB table/view DDL (for the tables selected by `masManage.schemaTables`), plus full row data (CSV) for the tables listed in `masManage.dataTables`, to MANAGE/DBSCHEMA/ (step 5). The DB password is resolved from (in order) the `MAS_DB_PASSWORD` env var / gitignored `secrets.env`, then `masManage.database.password` which may be a literal or an `env:VAR` / `file:/path` / `cmd:<command>` reference — keep the real secret out of the tracked `config.yaml`
+- `secrets.env.example` — template for local DB credentials; copy to `secrets.env` (gitignored) and set `MAS_DB_PASSWORD` (auto-loaded by step 5)
 - `MANAGE/SMP/` — extracted SMP contents, including `.class` files kept as-is (populated by step 3)
 - `MANAGE/GRAPHITE/node_modules/@maximo` — extracted Graphite @maximo packages (populated by step 4)
 - `MANAGE/DBSCHEMA/` — exported schema (one `.sql` per table in `tables/` and per view in `views/`) plus, for tables listed in `masManage.dataTables`, one `.csv` of row data per table in `data/` (populated by step 5)
