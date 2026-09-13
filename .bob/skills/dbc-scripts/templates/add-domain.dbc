@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: define domains and attach one to an attribute.
+  overwrite="false" preserves existing values if the domain already exists.
+-->
+<script author="YOURID" scriptname="MYFEATURE">
+  <description>Add domains MYALN and MYSYN</description>
+
+  <check skip_script="true">
+    <check_query query="select 1 from maxdomain where domainid = 'MYALN'"/>
+  </check>
+
+  <statements>
+    <!-- ALN (value list) domain -->
+    <specify_aln_domain domainid="MYALN" description="My value list"
+                        maxtype="UPPER" length="20" overwrite="false" internal="false">
+      <alnvalueinfo value="LOW"    description="Low"/>
+      <alnvalueinfo value="MEDIUM" description="Medium"/>
+      <alnvalueinfo value="HIGH"   description="High"/>
+    </specify_aln_domain>
+
+    <!-- Synonym domain: external "value" maps to stored "maxvalue".
+         Exactly one row per maxvalue should have defaults="true". -->
+    <specify_synonym_domain domainid="MYSYN" description="My synonym domain"
+                            maxtype="UPPER" length="10" overwrite="false" internal="false">
+      <synonymvalueinfo value="OPEN"   maxvalue="OPEN"   defaults="true"  description="Open"/>
+      <synonymvalueinfo value="ACTIVE" maxvalue="OPEN"   defaults="false" description="Active (synonym of Open)"/>
+      <synonymvalueinfo value="CLOSED" maxvalue="CLOSED" defaults="true"  description="Closed"/>
+    </specify_synonym_domain>
+
+    <!-- Numeric domain (optional) -->
+    <specify_numeric_domain domainid="MYNUM" description="Allowed numbers"
+                            maxtype="INTEGER" length="4" scale="0" overwrite="false">
+      <numericvalueinfo value="1" description="One"/>
+      <numericvalueinfo value="2" description="Two"/>
+    </specify_numeric_domain>
+
+    <!-- Attach a domain to an existing attribute -->
+    <modify_attribute object="OBJECTNAME" attribute="PRIORITY" domain="MYALN"/>
+  </statements>
+</script>

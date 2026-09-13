@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: create a new persistent Maximo object (table) + index + relationship.
+  Replace ALLCAPS placeholders. Object/attribute names are UPPERCASE.
+  Validate with xmllint against script.dtd before shipping.
+  (Note: XML comments must not contain a double hyphen.)
+-->
+<script author="YOURID" scriptname="MYFEATURE">
+  <description>Create MYTABLE object</description>
+
+  <!-- Skip if the object already exists -->
+  <check skip_script="true">
+    <check_query query="select 1 from maxobject where objectname = 'MYTABLE'"/>
+  </check>
+
+  <statements>
+    <define_table object="MYTABLE"
+                  description="My custom table"
+                  service="CUSTAPP"
+                  classname="psdi.mbo.custom.MyTableSet"
+                  type="system"
+                  persistent="true"
+                  primarykey="MYTABLEID"
+                  mainobject="true"
+                  internal="false">
+      <!-- Primary key (numeric id) -->
+      <attrdef attribute="MYTABLEID" maxtype="INTEGER" length="12" scale="0"
+               title="ID" remarks="Primary key"
+               persistent="true" required="true" mustbe="false" ispositive="true"
+               canautonum="false" userdefined="false" haslongdesc="false"
+               searchtype="EXACT" localizable="false" restricted="false"/>
+      <!-- Business key -->
+      <attrdef attribute="MYNUM" maxtype="UPPER" length="20"
+               title="Number" remarks="Business key"
+               persistent="true" required="true" mustbe="false"
+               canautonum="true" autokey="MYNUM" userdefined="false" haslongdesc="false"
+               searchtype="WILDCARD" localizable="false" restricted="false"/>
+      <!-- Localizable description -->
+      <attrdef attribute="DESCRIPTION" maxtype="ALN" length="100"
+               title="Description" remarks="Description"
+               persistent="true" required="false" haslongdesc="true"
+               searchtype="TEXT" localizable="true" restricted="false"/>
+      <!-- Status flag (YORN) -->
+      <attrdef attribute="ACTIVE" maxtype="YORN" length="1" defaultvalue="1"
+               title="Active" remarks="Is active"
+               persistent="true" required="true" searchtype="EXACT"
+               localizable="false" restricted="false"/>
+    </define_table>
+
+    <!-- Unique index on the business key -->
+    <specify_index name="MYTABLE_NDX1" object="MYTABLE" unique="true">
+      <indexkey column="MYNUM" ascending="true"/>
+    </specify_index>
+
+    <!-- Optional: relationship to another object -->
+    <create_relationship name="OWNER" parent="MYTABLE" child="PERSON"
+        whereclause="personid = :ownerid"
+        remarks="Lookup the owning person"/>
+  </statements>
+</script>

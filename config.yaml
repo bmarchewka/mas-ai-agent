@@ -1,0 +1,39 @@
+# Container engine used for every workflow step (all steps run through
+# containers). Docker and Podman are supported; they share the same CLI, so
+# switching engines needs no other change.
+#   engine: docker | podman   (default: docker when this section is omitted)
+container:
+  engine: podman
+# MAS Manage image references
+# Set catalog.operatorImage and catalog.operatorTag to target a specific operator catalog release.
+# The resolve script will populate status.manageadmin automatically.
+catalog:
+  operatorImage: icr.io/cpopen/ibm-maximo-operator-catalog
+  operatorTag: v9-260827-amd64
+masManage:
+  database:
+    host: 63.180.240.251
+    port: 50000
+    # engine options: mssql | db2 | oracle
+    type: db2
+    name: maxdev76
+    schema: maximo
+    username: maximo
+    password: ********
+  # Which tables' schema (DDL) to export in step 5.
+  #   "*"                            -> all tables (default; also if omitted)
+  #   [WORKORDER, ASSET, LOCATIONS]  -> only these tables (YAML list)
+  # Names are matched case-insensitively.
+  schemaTables: [WORKORDER, ASSET, LOCATIONS, TICKET, SR, WPTOOL, WPSERVICE, WPMATERIAL]
+  # Full row DATA exported to MANAGE/DBSCHEMA/data/<TABLE>.csv (in addition to
+  # the DDL). Same forms as schemaTables:
+  #   [MAXRELATIONSHIP, WORKORDER]   -> only these tables (YAML list)
+  #   "*"                            -> data for ALL tables (can be very large!)
+  # Omit or leave empty to export DDL only (no data). Case-insensitive.
+  dataTables: [MAXRELATIONSHIP]
+# !! SECTION STATUS WAS AUTO-GENERATED — do not edit manually !!
+# Populated by scripts/mas-manage-resolve-image.sh (Task 2).
+# Re-run that script to refresh these values.
+status:
+  manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.215-amd64@sha256:bc14948da58577536550c00267bedf4a875190cd6ce0062ef29344c306b2c649
+  graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.36-amd64@sha256:2499e9f87703e0cc595d0b61c1d61345038c38374f81c50cc3732469bb4c9e1f

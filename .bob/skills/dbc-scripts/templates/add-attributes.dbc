@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: add attribute(s) to an existing object.
+  NOTE: a required="true" column on a table that already has rows MUST have a
+  defaultvalue (or a RequiredColumnDefaults.txt entry) so existing rows back-fill.
+-->
+<script author="YOURID" scriptname="MYFEATURE">
+  <description>Add attribute(s) to OBJECTNAME</description>
+
+  <!-- Skip if the attribute already exists -->
+  <check skip_script="true">
+    <check_query query="select 1 from maxattribute where objectname = 'OBJECTNAME' and attributename = 'NEWCOL'"/>
+  </check>
+
+  <statements>
+    <add_attributes object="OBJECTNAME">
+      <!-- Optional text column -->
+      <attrdef attribute="NEWCOL" maxtype="ALN" length="50"
+               title="New Column" remarks="What this holds"
+               persistent="true" required="false"
+               searchtype="WILDCARD" localizable="false" restricted="false"/>
+
+      <!-- Required column WITH default (safe on populated tables) -->
+      <attrdef attribute="STATUSFLAG" maxtype="YORN" length="1" defaultvalue="0"
+               title="Status Flag" remarks="Required flag with default"
+               persistent="true" required="true"
+               searchtype="EXACT" localizable="false" restricted="false"/>
+
+      <!-- Column that inherits type/length from an existing column (foreign key) -->
+      <attrdef attribute="OWNERID" maxtype="INTEGER"
+               sameasobject="PERSON" sameasattribute="PERSONUID"
+               title="Owner" remarks="FK to PERSON"
+               persistent="true" required="false"
+               searchtype="EXACT" localizable="false" restricted="false"/>
+    </add_attributes>
+
+    <!-- Optional: index the new FK -->
+    <specify_index name="OBJECTNAME_NDXNEW" object="OBJECTNAME" unique="false">
+      <indexkey column="OWNERID" ascending="true"/>
+    </specify_index>
+  </statements>
+</script>

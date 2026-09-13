@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: seed / update configuration data idempotently.
+  For inserts, ignore_duplicates="true" makes re-runs safe without a <check>.
+-->
+<script author="YOURID" scriptname="MYFEATURE">
+  <description>Seed MYLOOKUP rows and update a config flag</description>
+
+  <statements>
+    <!-- Idempotent seed insert. One <insertrow> per row; one value-type per column
+         (string | number | boolean | date | domainvalue+domainid | ...). -->
+    <insert table="MYLOOKUP" ignore_duplicates="true">
+      <insertrow>
+        <columnvalue column="CODE"        string="A"/>
+        <columnvalue column="DESCRIPTION" string="Option A"/>
+        <columnvalue column="SEQUENCE"    number="1"/>
+        <columnvalue column="ACTIVE"      boolean="true"/>
+      </insertrow>
+      <insertrow>
+        <columnvalue column="CODE"        string="B"/>
+        <columnvalue column="DESCRIPTION" string="Option B"/>
+        <columnvalue column="SEQUENCE"    number="2"/>
+        <columnvalue column="ACTIVE"      boolean="true"/>
+      </insertrow>
+    </insert>
+
+    <!-- Update: <set> is the SET clause; <where> is ANDed equals;
+         <whereclause> is free-form (XML-escape < > & ). -->
+    <update table="MYLOOKUP">
+      <set>
+        <columnvalue column="ACTIVE" boolean="false"/>
+      </set>
+      <where>
+        <columnvalue column="CODE" string="B"/>
+      </where>
+    </update>
+
+    <!-- Delete example (guarded by a whereclause) -->
+    <!--
+    <delete table="MYLOOKUP">
+      <whereclause value="active = 0 and sequence &gt; 100"/>
+    </delete>
+    -->
+  </statements>
+</script>

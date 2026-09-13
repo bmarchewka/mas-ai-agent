@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: add a system property (maxprop) and a maxvar.
+-->
+<script author="YOURID" scriptname="MYFEATURE">
+  <description>Add property mxe.myfeature.setting and maxvar MYVAR</description>
+
+  <check skip_script="true">
+    <check_query query="select 1 from maxprop where propname = 'mxe.myfeature.setting'"/>
+  </check>
+
+  <statements>
+    <!-- System property. secure_level: private|public|secure|mtsecure.
+         scope: global|instance|open. maxtype: ALN|INTEGER|YORN. -->
+    <add_property name="mxe.myfeature.setting"
+                  description="Enable my feature"
+                  maxtype="YORN"
+                  secure_level="public"
+                  scope="global"
+                  value="1"
+                  default_value="1"
+                  live_refresh="true"
+                  online_changes="true"
+                  required="false"/>
+
+    <!-- If the property already exists and you only want to change its value: -->
+    <!-- <set_property name="mxe.myfeature.setting" value="1"/> -->
+
+    <!-- A maxvar. type: system|site|organization|system_tenant -->
+    <create_maxvar name="MYVAR" description="My system maxvar" type="system" default="0"/>
+  </statements>
+</script>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script SYSTEM "script.dtd">
+<!--
+  TEMPLATE: register a new application, its signature (security) options, its
+  toolbar/action menus, add it to a module, and grant the new options to groups
+  that already have READ on the app (standard applicationauth pattern).
+-->
+<script author="YOURID" scriptname="MYAPP">
+  <description>Create application MYAPP</description>
+
+  <check skip_script="true">
+    <check_query query="select 1 from maxapps where app = 'MYAPP'"/>
+  </check>
+
+  <statements>
+    <!-- 1) The application -->
+    <create_app app="MYAPP" description="My Application" maintbname="MYTABLE"/>
+
+    <!-- 2) Signature options (security). READ grants the common view options;
+         alsogrants/alsorevokes model the toolbar dependencies. -->
+    <add_sigoption app="MYAPP" optionname="READ"      description="Read access"        alsogrants="CLEAR,BOOKMARK,NEXT,PREVIOUS" alsorevokes="ALL"                 esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="INSERT"    description="New record"         alsogrants="SAVE"                          alsorevokes="DUPLICATE"           esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="SAVE"      description="Save record"        alsorevokes="INSERT,DUPLICATE,DELETE"                                        esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="DELETE"    description="Delete record"      prerequisite="SAVE"                                                          esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="DUPLICATE" description="Duplicate record"   prerequisite="INSERT"                                                        esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="CLEAR"     description="Clear changes"                                                                                  esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="BOOKMARK"  description="Add to bookmarks"                                                                               esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="NEXT"      description="Next record"                                                                                    esigenabled="false" visible="true"/>
+    <add_sigoption app="MYAPP" optionname="PREVIOUS"  description="Previous record"                                                                                esigenabled="false" visible="true"/>
+
+    <!-- 3) Toolbar -->
+    <create_app_menu app="MYAPP" type="tool">
+      <app_menu_option option="INSERT"   tabdisplay="ALL"  accesskey="CTRL+ALT+I" image="nav_icon_insert.gif"/>
+      <app_menu_option option="SAVE"     tabdisplay="MAIN" accesskey="CTRL+ALT+S" image="nav_icon_save.gif"/>
+      <app_menu_option option="CLEAR"    tabdisplay="MAIN" accesskey="CTRL+ALT+C" image="nav_icon_clear.gif"/>
+      <menu_separator/>
+      <app_menu_option option="PREVIOUS" tabdisplay="MAIN" accesskey="CTRL+ALT+P" image="nav_icon_previous.gif"/>
+      <app_menu_option option="NEXT"     tabdisplay="MAIN" accesskey="CTRL+ALT+N" image="nav_icon_next.gif"/>
+    </create_app_menu>
+
+    <!-- 4) Select-action menu -->
+    <create_app_menu app="MYAPP" type="action">
+      <app_menu_option option="DUPLICATE" tabdisplay="MAIN"/>
+      <app_menu_option option="DELETE"    tabdisplay="MAIN"/>
+      <app_menu_option option="BOOKMARK"  tabdisplay="MAIN"/>
+    </create_app_menu>
+
+    <!-- 5) Put the app on a module's menu (e.g. the Administration module) -->
+    <module_app module="CUSTOM" app="MYAPP" menu_position="last"/>
+
+    <!-- 6) Grant the new sigoptions to groups that already have any option on this app.
+         Oracle shown (uses the sequence). Provide sqlserver/db2 variants if needed. -->
+    <freeform description="Grant MYAPP options to existing groups">
+      <sql target="all">insert into applicationauth (groupname, app, optionname, applicationauthid)
+        (select groupname, 'MYAPP', optionname, applicationauthseq.nextval
+         from applicationauth where app = 'MYAPP');</sql>
+    </freeform>
+  </statements>
+</script>
