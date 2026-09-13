@@ -26,10 +26,29 @@ database client. The whole pipeline is driven by [`config.yaml`](config.yaml) an
 | **Network access to the Maximo DB** | Step 5 connects directly to your database (often needs VPN) | `nc -z -w 5 <db-host> <db-port>` |
 
 Pick the engine with `container.engine` in `config.yaml` (`docker` or `podman`; defaults to `docker`).
-The operator catalog image (`icr.io/cpopen/...`) is public, so step 2 needs no login.
 
 `prerequisites.sh` only checks the configured container engine; the registry login and DB
 reachability are validated when the relevant step actually pulls or connects.
+
+### Why an IBM entitlement key is required
+
+The `manageadmin` and `graphite-configuration` images (used by steps 3 and 4) live in
+**`cp.icr.io`**, IBM's *entitled* container registry. They are **licensed IBM software** — part of
+Maximo Application Suite / the Cloud Pak — so IBM gates them behind an **entitlement key**: a token
+tied to your IBM software entitlement that proves you're licensed to run Manage. There is no
+anonymous access; the registry refuses an unauthenticated pull outright:
+
+> `unauthorized: Authorization required` — IBM Container Registry
+
+So before steps 3–4 you authenticate once (the login is cached until the key expires or you log out):
+
+```bash
+docker login cp.icr.io      # or: podman login cp.icr.io
+#   Username: cp
+#   Password: <your IBM entitlement key>
+```
+
+Get the key from **[myibm.ibm.com → Container software library](https://myibm.ibm.com/products-services/containerlibrary)** ("Get entitlement key" / copy key). The username is always the literal `cp`.
 
 ---
 
@@ -198,31 +217,3 @@ mirrors the SMP tree, step 4 re-copies and re-unzips, and step 5 clears and rewr
 | `MANAGE/DBSCHEMA/data/<TABLE>.csv` | Step 5 | Full row data (CSV) for each table listed in `masManage.dataTables`. |
 
 `MANAGE/` is generated output — it's meant to be produced by a run, not hand-edited.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
-|---------|-------------|
-| `... pull access denied` on `cp.icr.io` | Not logged in / expired entitlement key. Run `docker login cp.icr.io` (or `podman login cp.icr.io`) — user `cp`, password = IBM entitlement key. Log in to the same engine you set in `container.engine`. |
-| Step 5: `Unable to connect ... Connection timed out`, or DB2 `SQL30081N ... Communication error ... "connect" ... error code(s): "111"` (connection refused) | The DB host isn't reachable from your machine. Connect to the required VPN / open the firewall, verify `masManage.database` host & port, then test with `nc -z -w 5 <host> <port>` and re-run step 5 only. The container inherits the host's network, so if the host can't reach the DB, neither can the export — fix reachability on the host first. |
-| `WARNING: ... platform (linux/amd64) does not match ... arm64` | Harmless on Apple Silicon — files are only read/copied out of the image, never executed. |
-| Step 5: `WARNING: schema '<x>' had no tables; using default schema` | The configured `schema` was empty; the exporter fell back to the driver's default (e.g. SQL Server `dbo`). Set `masManage.database.schema` correctly if that's not what you want. |
-| Step 5 (DB2) on Apple Silicon: `ibm_db` fails to install (`NameError: name 'arch_' is not defined`) | IBM's DB2 driver has no ARM64 build. The script handles this automatically by running the DB2 container as `--platform linux/amd64` (needs amd64 emulation — Docker Desktop has it on by default; for Podman ensure `qemu-user-static` is available in the machine, which the default `podman machine` image ships). Nothing to do — just expect it to run slower under emulation. |
-| Podman: `Error: ... no such file or directory` mounting a temp file in step 5 | Podman on macOS only bind-mounts paths inside the machine's shared mounts (your home dir). The script already writes its temp files under the repo's `tmp/`; make sure the repo lives under your home directory (the default shared path), or add its parent to `podman machine` shared mounts. |
-| Step 5: `WARNING: data table '<name>' not found ... skipped` | A name in `masManage.dataTables` doesn't match a real table in the resolved schema. Check the spelling; matching is case-insensitive but the table must exist. |
-
----
-
-## Repository layout
-
-```
-config.yaml                        # inputs (container engine, catalog, database) + generated status
-scripts/                           # one script per workflow step
-scripts/container-runtime.sh       # shared helper: resolves the docker|podman engine from config
-.bob/skills/mas-workflow/SKILL.md  # the workflow definition (agent-discoverable)
-MANAGE/                            # generated output (SMP / GRAPHITE / DBSCHEMA)
-AGENTS.md, CLAUDE.md               # agent-facing project instructions
-README.md                          # this file
-```
