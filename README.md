@@ -17,6 +17,18 @@ database client. The whole pipeline is driven by [`config.yaml`](config.yaml) an
 
 ---
 
+## Quick Start
+
+> **What you need first:** a running **Docker** or **Podman**, an **IBM entitlement key** (for the
+> `cp.icr.io` images), and **network access** to your Maximo database. Full details in
+> [Prerequisites](#prerequisites).
+
+Run **`/mas-workflow`** in your AI agent (IBM Bob, Claude Code, …) and it drives the whole pipeline
+for you. The vendor baseline lands in **`MANAGE/`** — the SMP tree, Graphite app definitions, and DB
+schema, ready to diff against your customizations.
+
+---
+
 ## Prerequisites
 
 | Requirement | Why | Check |
@@ -57,7 +69,7 @@ Get the key from **[myibm.ibm.com → Container software library](https://myibm.
 `config.yaml` has a small `container` toggle plus three sections: you edit `catalog` and
 `masManage`; the `status` section is written for you.
 
-### 0. `container` — which container engine to use (input)
+### 1. `container` — which container engine to use (input)
 
 ```yaml
 container:
@@ -69,7 +81,7 @@ scripts do, so switching is just this one value. **Defaults to `docker`** if the
 omitted. Whichever you choose must be installed and on your `PATH` (and, for the IBM-entitled
 images, logged in — see [Prerequisites](#prerequisites)).
 
-### 1. `catalog` — which operator catalog release to read (input)
+### 2. `catalog` — which operator catalog release to read (input)
 
 ```yaml
 catalog:
@@ -82,7 +94,7 @@ catalog:
 | `operatorImage` | The IBM Maximo Operator Catalog image (public registry). Rarely changes. |
 | `operatorTag` | The catalog release tag. This pins which MAS versions get resolved in step 2. Change this to target a different catalog release. |
 
-### 2. `masManage.database` — your Maximo database connection (input)
+### 3. `masManage.database` — your Maximo database connection (input)
 
 ```yaml
 masManage:
@@ -111,7 +123,7 @@ masManage:
 `config.yaml` is tracked in git, so the DB password should **not** be stored there in plain text.
 Step 5 resolves the password in this order:
 
-1. **`MAS_DB_PASSWORD` environment variable** — wins if set. The script also auto-loads a
+**`MAS_DB_PASSWORD` environment variable** — wins if set. The script also auto-loads a
    **gitignored `secrets.env`** from the repo root, so the easiest setup is:
 
    ```bash
@@ -119,20 +131,6 @@ Step 5 resolves the password in this order:
    ```
 
    (Or just `export MAS_DB_PASSWORD=...` in your shell / CI secret store.)
-
-2. **`masManage.database.password` in `config.yaml`**, which may be a *reference* rather than a
-   literal:
-
-   | Value | Resolves to |
-   |-------|-------------|
-   | `env:VARNAME` | the value of that environment variable (recommended default: `env:MAS_DB_PASSWORD`) |
-   | `file:/path/to/secret` | the contents of that file (`~` is expanded; surrounding whitespace trimmed) |
-   | `cmd:<command>` | the command's output — e.g. an OS keychain: `cmd:security find-generic-password -s mas-db -w` (macOS) or `cmd:secret-tool lookup service mas-db` (Linux). Quote the whole value in YAML if it contains `:` followed by a space. |
-   | *(a bare literal)* | used as-is — **backward compatible**, but discouraged for real secrets |
-
-Whichever source is used, the resolved password is only ever written to a `chmod 600` env file
-that is mounted into the export container — it never appears on the `docker`/`podman` command line
-or in the host process list.
 
 #### `masManage.schemaTables` — which tables' schema to export
 
@@ -186,7 +184,7 @@ every row) and read natively by `head`/`grep`/`awk`, `duckdb`, `pandas`, and AI 
 header row of column names; values use standard CSV quoting (RFC 4180). **SQL `NULL` is written as an
 empty field** (indistinguishable from an empty string — keep that in mind when analysing the data).
 
-### 3. `status` — resolved images (output, auto-generated)
+### 4. `status` — resolved images (output, auto-generated)
 
 ```yaml
 # !! AUTO-GENERATED — do not edit manually !!
