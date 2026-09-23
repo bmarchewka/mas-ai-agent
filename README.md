@@ -219,6 +219,8 @@ mirrors the SMP tree, step 4 re-copies and re-unzips, and step 5 clears and rewr
 
 ### What each step does
 
+<img width="1774" height="998" alt="diagram" src="https://github.com/user-attachments/assets/fe9c5f0f-2d8a-4733-80ee-885167beca97" />
+
 | # | Script | Action |
 |---|--------|--------|
 | 1 | `prerequisites.sh` | Verifies the configured container engine (`docker` or `podman`) is on `PATH`. |
