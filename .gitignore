@@ -3,3 +3,21 @@ tmp/
 # Local secrets (DB password etc.) — never commit. Template: secrets.env.example
 secrets.env
 .env
+customer-projects/
+
+# Graphite offline cache and build artifacts
+offline-mirror/
+.offline-cache-timestamp
+.offline-cache-metadata.json
+.bob/
+.vscode/
+node_modules/
+**/node_modules/
+**/build/
+
+# Graphite vendorized dependencies and configuration
+vendors/
+.yarnrc
+configure.cjs
+libraries.json
+setup.cjs
