@@ -5,15 +5,34 @@
 container:
   engine: docker
 # MAS Manage image references
-# catalog.operatorTag selects the operator catalog release(s) to extract. It can be
-# a single tag or a list — each tag is resolved (step 2) and extracted (steps 3-4)
-# into its own MANAGE/<tag>/ folder:
-#   operatorTag: v9-260827-amd64
-#   operatorTag: [v9-260827-amd64, v9-261105-amd64]
+# catalog.operators lists the operator catalog release(s) (tags of operatorImage)
+# to read, and per tag which versions to extract:
+#   manage: Manage operator versions -> SMP + Graphite apps   (steps 3-4)
+#   core:   MAS core versions        -> Graphite @maximo      (step 4)
+# Each list item can be:
+#   latest   newest stable version in the catalog's defaultChannel
+#   9.2.x    newest version in that channel (also 9.2, or a channel name such
+#            as 9.3.x-feature for pre-releases)
+#   9.2.4    that exact version
+# Omitting manage or core (or leaving the tag empty) means [latest].
+# Each version lands in MANAGE/<tag>/manage-<version>/ or MANAGE/<tag>/core-<version>/.
+# See what a catalog offers: bash scripts/mas-manage-resolve-image.sh --list-versions
+# Example:
+#   operators:
+#     v9-260827-amd64:
+#     v9-261105-amd64:
+#       manage: [9.2.x, 9.1.x]
+#       core:   [9.2.x, 9.1.x]
 # The resolve script populates status.operators.<tag> automatically.
 catalog:
   operatorImage: icr.io/cpopen/ibm-maximo-operator-catalog
-  operatorTag: [v9-260827-amd64, v9-261105-amd64]
+  operators:
+    v9-250403-amd64:
+      manage: [9.0.x]
+      core: [9.0.x]
+    v9-261105-amd64:
+      manage: [9.1.x, 9.2.x]
+      core: [9.1.x, 9.2.x]
 masManage:
   # Run step 5 (DB schema DDL + selected table data export)?
   #   false -> skip step 5 entirely (default; also when omitted)
@@ -45,16 +64,47 @@ masManage:
   #   "*"                            -> data for ALL tables (can be very large!)
   # Omit or leave empty to export DDL only (no data). Case-insensitive.
   dataTables: [MAXRELATIONSHIP]
-# !! SECTION STATUS WAS AUTO-GENERATED — do not edit manually !!
-# Populated by scripts/mas-manage-resolve-image.sh (step 2), one entry per
-# catalog.operatorTag. Re-run that script to refresh these values.
+  # !! SECTION STATUS WAS AUTO-GENERATED — do not edit manually !!
+  # Populated by scripts/mas-manage-resolve-image.sh (step 2): per operator tag,
+  # the resolved manage and core versions. Re-run that script to refresh them.
 status:
   operators:
-    v9-260827-amd64:
-      catalogImage: icr.io/cpopen/ibm-maximo-operator-catalog:v9-260827-amd64
-      manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.215-amd64@sha256:bc14948da58577536550c00267bedf4a875190cd6ce0062ef29344c306b2c649
-      graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.36-amd64@sha256:2499e9f87703e0cc595d0b61c1d61345038c38374f81c50cc3732469bb4c9e1f
+    v9-250403-amd64:
+      catalogImage: icr.io/cpopen/ibm-maximo-operator-catalog:v9-250403-amd64
+      manage:
+        9.0.11:
+          requested: 9.0.x
+          channel: 9.0.x
+          bundle: ibm-mas-manage.v9.0.11
+          source: operator
+          manageadmin: cp.icr.io/cp/manage/manageadmin:9.0.87-amd64@sha256:686f6fea89e644f9884dc71542df2848d63238acbf1f848405bc50b1ead06b1e
+      skipped:
+        core: 9.0.x
     v9-261105-amd64:
       catalogImage: icr.io/cpopen/ibm-maximo-operator-catalog:v9-261105-amd64
-      manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.265-amd64@sha256:0eb9e4ec55f640e26ade7145c14644a90ab04da19eb52b538d4f7eccfbe0be4a
-      graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.55-amd64@sha256:12dbd573c90e841fa8078c7b92c5763f5e14aa3c77c43c84c8e3f786a73b2d48
+      manage:
+        9.1.27:
+          requested: 9.1.x
+          channel: 9.1.x
+          bundle: ibm-mas-manage.v9.1.27
+          source: catalog
+          manageadmin: cp.icr.io/cp/manage/manageadmin:9.1.505-amd64@sha256:d9677467aa34e1b9ef6ae7a17594ca760d2494daaada7518ff2794a7748cbe00
+        9.2.6:
+          requested: 9.2.x
+          channel: 9.2.x
+          bundle: ibm-mas-manage.v9.2.6
+          source: catalog
+          manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.265-amd64@sha256:0eb9e4ec55f640e26ade7145c14644a90ab04da19eb52b538d4f7eccfbe0be4a
+      core:
+        9.1.29:
+          requested: 9.1.x
+          channel: 9.1.x
+          bundle: ibm-mas.v9.1.29
+          source: catalog
+          graphite: cp.icr.io/cp/mas/graphite-configuration:1.7.130-amd64@sha256:51f923a17b3035b7885d7939a458f1a1ccfb7f92b6c9b3699e3a571d931a6a25
+        9.2.10:
+          requested: 9.2.x
+          channel: 9.2.x
+          bundle: ibm-mas.v9.2.10
+          source: catalog
+          graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.55-amd64@sha256:12dbd573c90e841fa8078c7b92c5763f5e14aa3c77c43c84c8e3f786a73b2d48

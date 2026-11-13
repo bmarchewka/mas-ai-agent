@@ -7,8 +7,9 @@ set -euo pipefail
 # Every workflow step runs through containers, so the container engine is the
 # main host prerequisite. Which engine (docker | podman) is chosen by
 # container.engine in config.yaml. Reading/writing config.yaml (nested
-# status.operators, operatorTag lists) additionally needs yq (mikefarah) or
-# python3 — either one is enough.
+# status.operators, version lists) additionally needs yq (mikefarah) or
+# python3 — either one is enough. Step 2's catalog resolver prefers python3 and
+# otherwise runs in a throwaway python container.
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

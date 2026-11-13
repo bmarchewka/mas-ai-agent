@@ -9,10 +9,14 @@ Usage:
   config_yaml.py get  CONFIG KEY [KEY ...]   -> scalar value ("" if absent/null)
   config_yaml.py list CONFIG KEY [KEY ...]   -> one item per line; a scalar is
                                                 split on commas; absent -> none
-  config_yaml.py write-status CONFIG         -> replace the top-level `status:`
-                                                block with status.operators built
-                                                from TSV on stdin:
-                                                tag<TAB>catalogImage<TAB>manageadmin<TAB>graphite
+  config_yaml.py keys CONFIG KEY [KEY ...]   -> keys of a map, one per line
+  config_yaml.py rows CONFIG KEY [KEY ...]   -> every leaf below KEY as
+                                                key1<TAB>key2<TAB>...<TAB>value
+                                                (path relative to the document root)
+  config_yaml.py write-status CONFIG         -> replace the top-level `status:` block
+                                                with the leaves given on stdin, one per
+                                                line: key<TAB>key<TAB>...<TAB>value
+                                                (paths relative to `status`)
 """
 import re
 import sys
@@ -119,24 +123,55 @@ def cmd_list(config, keys):
             print(str(item).strip())
 
 
+def cmd_keys(config, keys):
+    val = lookup(load(config), keys)
+    if isinstance(val, dict):
+        for k in val:
+            print(k)
+
+
+def cmd_rows(config, keys):
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, path + [k])
+        elif node is not None and not isinstance(node, list):
+            print("\t".join(path + [str(node)]))
+
+    walk(lookup(load(config), keys), list(keys))
+
+
+def _yaml_key(k):
+    return f'"{k}"' if re.search(r"^[\d.]+$|[:#\s]", k) else k
+
+
 def cmd_write_status(config):
-    entries = []
+    tree = {}
     for line in sys.stdin.read().splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) != 4:
+        if len(parts) < 2:
             sys.exit(f"ERROR: malformed status row: {line!r}")
-        entries.append(parts)
+        node = tree
+        for k in parts[:-2]:
+            node = node.setdefault(k, {})
+        node[parts[-2]] = parts[-1]
 
-    block = ["status:\n", "  operators:\n"]
-    if not entries:
-        block = ["status:\n", "  operators: {}\n"]
-    for tag, catalog, manageadmin, graphite in entries:
-        block.append(f'    "{tag}":\n')
-        block.append(f'      catalogImage: "{catalog}"\n')
-        block.append(f'      manageadmin: "{manageadmin}"\n')
-        block.append(f'      graphite: "{graphite}"\n')
+    block = ["status:\n"]
+
+    def emit(node, indent):
+        for k, v in node.items():
+            if isinstance(v, dict):
+                block.append(f"{'  ' * indent}{_yaml_key(k)}:\n")
+                emit(v, indent + 1)
+            else:
+                block.append(f'{"  " * indent}{_yaml_key(k)}: "{v}"\n')
+
+    if tree:
+        emit(tree, 1)
+    else:
+        block = ["status: {}\n"]
 
     with open(config) as f:
         lines = f.readlines()
@@ -174,6 +209,10 @@ def main(argv):
         cmd_get(config, keys)
     elif cmd == "list":
         cmd_list(config, keys)
+    elif cmd == "keys":
+        cmd_keys(config, keys)
+    elif cmd == "rows":
+        cmd_rows(config, keys)
     elif cmd == "write-status":
         cmd_write_status(config)
     else:
