@@ -5,8 +5,10 @@ set -euo pipefail
 # prerequisites.sh — Validate required tools
 # ---------------------------------------------------------------------------
 # Every workflow step runs through containers, so the container engine is the
-# only host prerequisite. Which engine (docker | podman) is chosen by
-# container.engine in config.yaml.
+# main host prerequisite. Which engine (docker | podman) is chosen by
+# container.engine in config.yaml. Reading/writing config.yaml (nested
+# status.operators, operatorTag lists) additionally needs yq (mikefarah) or
+# python3 — either one is enough.
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +28,20 @@ if command -v "${ENGINE}" &>/dev/null; then
   printf 'OK  %-10s %s\n' "${ENGINE}" "${ENGINE_VERSION}"
 else
   echo "MISSING  ${ENGINE}      (not found on PATH)" >&2
+  ERRORS=$((ERRORS + 1))
+fi
+
+# config.yaml parser — yq (mikefarah) preferred, python3 as fallback.
+if command -v yq &>/dev/null && yq --version 2>/dev/null | grep -q mikefarah; then
+  YQ_VERSION="$(yq --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  printf 'OK  %-10s %s\n' "yq" "${YQ_VERSION}"
+fi
+if command -v python3 &>/dev/null; then
+  PY_VERSION="$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  printf 'OK  %-10s %s\n' "python3" "${PY_VERSION}"
+fi
+if [[ -z "${YQ_VERSION:-}" && -z "${PY_VERSION:-}" ]]; then
+  echo "MISSING  yq | python3  (one is required to read/write config.yaml)" >&2
   ERRORS=$((ERRORS + 1))
 fi
 

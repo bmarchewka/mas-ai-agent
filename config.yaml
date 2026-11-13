@@ -5,12 +5,20 @@
 container:
   engine: docker
 # MAS Manage image references
-# Set catalog.operatorImage and catalog.operatorTag to target a specific operator catalog release.
-# The resolve script will populate status.manageadmin automatically.
+# catalog.operatorTag selects the operator catalog release(s) to extract. It can be
+# a single tag or a list — each tag is resolved (step 2) and extracted (steps 3-4)
+# into its own MANAGE/<tag>/ folder:
+#   operatorTag: v9-260827-amd64
+#   operatorTag: [v9-260827-amd64, v9-261105-amd64]
+# The resolve script populates status.operators.<tag> automatically.
 catalog:
   operatorImage: icr.io/cpopen/ibm-maximo-operator-catalog
-  operatorTag: v9-260827-amd64
+  operatorTag: [v9-260827-amd64, v9-261105-amd64]
 masManage:
+  # Run step 5 (DB schema DDL + selected table data export)?
+  #   false -> skip step 5 entirely (default; also when omitted)
+  #   true  -> connect to masManage.database and export schemaTables / dataTables
+  export: false
   database:
     host: 3.67.95.64
     port: 50000
@@ -38,8 +46,15 @@ masManage:
   # Omit or leave empty to export DDL only (no data). Case-insensitive.
   dataTables: [MAXRELATIONSHIP]
 # !! SECTION STATUS WAS AUTO-GENERATED — do not edit manually !!
-# Populated by scripts/mas-manage-resolve-image.sh (Task 2).
-# Re-run that script to refresh these values.
+# Populated by scripts/mas-manage-resolve-image.sh (step 2), one entry per
+# catalog.operatorTag. Re-run that script to refresh these values.
 status:
-  manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.215-amd64@sha256:bc14948da58577536550c00267bedf4a875190cd6ce0062ef29344c306b2c649
-  graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.36-amd64@sha256:2499e9f87703e0cc595d0b61c1d61345038c38374f81c50cc3732469bb4c9e1f
+  operators:
+    v9-260827-amd64:
+      catalogImage: icr.io/cpopen/ibm-maximo-operator-catalog:v9-260827-amd64
+      manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.215-amd64@sha256:bc14948da58577536550c00267bedf4a875190cd6ce0062ef29344c306b2c649
+      graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.36-amd64@sha256:2499e9f87703e0cc595d0b61c1d61345038c38374f81c50cc3732469bb4c9e1f
+    v9-261105-amd64:
+      catalogImage: icr.io/cpopen/ibm-maximo-operator-catalog:v9-261105-amd64
+      manageadmin: cp.icr.io/cp/manage/manageadmin:9.2.265-amd64@sha256:0eb9e4ec55f640e26ade7145c14644a90ab04da19eb52b538d4f7eccfbe0be4a
+      graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.55-amd64@sha256:12dbd573c90e841fa8078c7b92c5763f5e14aa3c77c43c84c8e3f786a73b2d48

@@ -2,17 +2,30 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# mas-manage-resolve-image.sh — Resolve manageadmin image from operator catalog
+# mas-manage-resolve-image.sh — Resolve manageadmin + graphite images from the
+# operator catalog, for every tag in catalog.operatorTag
 # ---------------------------------------------------------------------------
-# Reads catalog.operatorImage and catalog.operatorTag from config.yaml, pulls
-# the OLM file-based catalog image, finds the manageadmin relatedImage entry
-# from /catalog/ibm-mas-manage/ (YAML bundle objects), and writes the resolved
-# URL to status.manageadmin in config.yaml.
+# catalog.operatorTag may be a single tag or a list of tags. For each tag the
+# OLM file-based catalog image (catalog.operatorImage:<tag>) is pulled, the
+# manageadmin and graphite-configuration relatedImage entries are looked up in
+# /catalog/ibm-mas-manage/ and /catalog/ibm-mas/, and the results are written
+# to config.yaml as:
+#
+#   status:
+#     operators:
+#       <tag>:
+#         catalogImage: <operatorImage>:<tag>
+#         manageadmin:  cp.icr.io/cp/manage/manageadmin:<ver>@sha256:...
+#         graphite:     cp.icr.io/cp/mas/graphite-configuration:<ver>@sha256:...
+#
+# The status block is rebuilt on every run: tags no longer configured are
+# dropped, and a tag that fails to resolve keeps its previous entry (if any).
+#
+# Usage: mas-manage-resolve-image.sh [--tag <operatorTag>]...
 # ---------------------------------------------------------------------------
 # Prerequisites:
-#   - Docker
-#   - jq (optional, python3 or grep fallback)
-#   - yq (optional, python3 or sed fallback for writing)
+#   - Container engine (docker | podman)
+#   - yq (mikefarah) or python3, for reading/writing config.yaml
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,65 +33,66 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CONFIG="${REPO_ROOT}/config.yaml"
 
+# shellcheck source=scripts/config-lib.sh
+source "${SCRIPT_DIR}/config-lib.sh"
+config_parser >/dev/null || exit 1
+
 # Container engine (docker | podman) chosen by container.engine in config.yaml.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
 
-# ---------------------------------------------------------------------------
-# 1. Parse catalog.operatorImage and catalog.operatorTag from config.yaml
-# ---------------------------------------------------------------------------
-parse_catalog_field() {
-  local FIELD="$1"
-  if command -v yq &>/dev/null; then
-    yq ".catalog.${FIELD}" "${CONFIG}"
-  elif command -v python3 &>/dev/null; then
-    python3 - "${CONFIG}" "${FIELD}" <<'EOF'
-import sys, re
-
-with open(sys.argv[1]) as f:
-    lines = f.readlines()
-
-field = sys.argv[2]
-in_catalog = False
-for line in lines:
-    if re.match(r'^catalog\s*:', line):
-        in_catalog = True
-        continue
-    if in_catalog:
-        if re.match(r'^\S', line) and not re.match(r'^\s', line):
-            break
-        m = re.match(r'^\s+' + re.escape(field) + r':\s*(.+)$', line)
-        if m:
-            print(m.group(1).strip())
-            sys.exit(0)
-
-sys.exit(f"ERROR: could not parse catalog.{field} from config.yaml")
-EOF
-  else
-    grep -A10 '^catalog:' "${CONFIG}" \
-      | grep "  ${FIELD}:" \
-      | awk -F': ' '{print $2}' \
-      | awk '{print $1}'
-  fi
-}
-
-OPERATOR_IMAGE="$(parse_catalog_field operatorImage)"
+OPERATOR_IMAGE="$(cfg_get "${CONFIG}" catalog operatorImage)"
 if [[ -z "${OPERATOR_IMAGE}" ]]; then
   echo "ERROR: could not read catalog.operatorImage from ${CONFIG}" >&2
   exit 1
 fi
 
-CATALOG_TAG="$(parse_catalog_field operatorTag)"
-if [[ -z "${CATALOG_TAG}" ]]; then
-  echo "ERROR: could not read catalog.operatorTag from ${CONFIG}" >&2
-  exit 1
+# ---------------------------------------------------------------------------
+# Parent run: loop over the operator tags, then write status.operators
+# ---------------------------------------------------------------------------
+run_per_tag "${BASH_SOURCE[0]}" "$@"
+if [[ -z "${MAS_CHILD_TAG:-}" ]]; then
+  # Rebuild status.operators: for every configured tag (config order) use this
+  # run's result, else keep the previous entry, else leave it out.
+  STATUS_TSV="${RUN_RESULTS_DIR}/status.tsv"
+  : > "${STATUS_TSV}"
+  WRITTEN=""
+  while IFS= read -r tag; do
+    [[ -z "${tag}" ]] && continue
+    if [[ " ${RUN_TAGS}" == *" ${tag} "* ]] && result_ok "${tag}"; then
+      cat_img="$(result_value "${tag}" "Catalog image")"
+      mgr_img="$(result_value "${tag}" "Resolved manageadmin")"
+      gra_img="$(result_value "${tag}" "Resolved graphite")"
+    else
+      cat_img="$(status_image "${CONFIG}" "${tag}" catalogImage)"
+      mgr_img="$(status_image "${CONFIG}" "${tag}" manageadmin)"
+      gra_img="$(status_image "${CONFIG}" "${tag}" graphite)"
+    fi
+    if [[ -n "${mgr_img}" && -n "${gra_img}" ]]; then
+      printf '%s\t%s\t%s\t%s\n' "${tag}" "${cat_img:-${OPERATOR_IMAGE}:${tag}}" "${mgr_img}" "${gra_img}" >> "${STATUS_TSV}"
+      WRITTEN="${WRITTEN}${tag} "
+    fi
+  done <<< "$(operator_tags "${CONFIG}")"
+  write_status_operators "${CONFIG}" < "${STATUS_TSV}"
+
+  echo ""
+  echo "Written status.operators in config.yaml for: ${WRITTEN:-<none>}"
+  print_run_summary
+  exit "${RUN_RC}"
 fi
 
+# ---------------------------------------------------------------------------
+# Child run: resolve one operator tag (MAS_CHILD_TAG)
+# ---------------------------------------------------------------------------
+# 1. Catalog image for this tag
+# ---------------------------------------------------------------------------
+CATALOG_TAG="${MAS_CHILD_TAG}"
 CATALOG_IMAGE="${OPERATOR_IMAGE}:${CATALOG_TAG}"
 CONTAINER_NAME="mas-catalog-${CATALOG_TAG}"
 
 echo "Catalog image: ${CATALOG_IMAGE}"
+result "Catalog image" "${CATALOG_IMAGE}"
 
 # ---------------------------------------------------------------------------
 # 2. Pull catalog image and create (or reuse) a named container
@@ -186,85 +200,5 @@ if [[ -z "${RESOLVED_GRAPHITE}" ]]; then
 fi
 echo "  graphite: ${RESOLVED_GRAPHITE}"
 
-# ---------------------------------------------------------------------------
-# 5. Write resolved images to status.<key> in config.yaml
-# ---------------------------------------------------------------------------
-# write_status_field KEY VALUE
-#   Sets status.<KEY> = VALUE, adding the key if it does not yet exist.
-write_status_field() {
-  local KEY="$1"
-  local VALUE="$2"
-
-  if command -v yq &>/dev/null; then
-    yq -i ".status.${KEY} = \"${VALUE}\"" "${CONFIG}"
-  elif command -v python3 &>/dev/null; then
-    python3 - "${CONFIG}" "${KEY}" "${VALUE}" <<'EOF'
-import sys, re
-
-config_path = sys.argv[1]
-key         = sys.argv[2]
-new_value   = sys.argv[3]
-
-with open(config_path) as f:
-    content = f.read()
-
-lines = content.splitlines(keepends=True)
-result_lines = []
-in_status   = False
-key_written = False
-
-for line in lines:
-    if re.match(r'^status\s*:', line):
-        in_status = True
-        result_lines.append(line)
-        continue
-    if in_status:
-        # Leaving the status block
-        if re.match(r'^\S', line):
-            # Append missing key before leaving the block
-            if not key_written:
-                result_lines.append(f'  {key}: "{new_value}"\n')
-                key_written = True
-            in_status = False
-        elif re.match(r'^\s+' + re.escape(key) + r':', line):
-            line = f'  {key}: "{new_value}"\n'
-            key_written = True
-    result_lines.append(line)
-
-# Handle status block at end of file with no trailing section
-if in_status and not key_written:
-    result_lines.append(f'  {key}: "{new_value}"\n')
-
-with open(config_path, 'w') as f:
-    f.write(''.join(result_lines))
-
-print(f"Written: {new_value}")
-EOF
-  else
-    # sed fallback — replace if exists
-    if grep -q "^  ${KEY}:" "${CONFIG}"; then
-      sed -i.bak "s|^\(  ${KEY}:\).*$|\1 \"${VALUE}\"|" "${CONFIG}"
-      rm -f "${CONFIG}.bak"
-    else
-      # Append under status: block
-      sed -i.bak "/^status:/a\\  ${KEY}: \"${VALUE}\"" "${CONFIG}"
-      rm -f "${CONFIG}.bak"
-    fi
-    echo "Written: ${VALUE}"
-  fi
-}
-
-write_status_field "manageadmin" "${RESOLVED_MANAGEADMIN}"
-write_status_field "graphite"    "${RESOLVED_GRAPHITE}"
-
-# ---------------------------------------------------------------------------
-# 6. Summary
-# ---------------------------------------------------------------------------
-echo ""
-echo "| Metric                    | Value |"
-echo "|---------------------------|-------|"
-echo "| Catalog image             | ${CATALOG_IMAGE} |"
-echo "| Catalog tag               | ${CATALOG_TAG} |"
-echo "| Resolved manageadmin      | ${RESOLVED_MANAGEADMIN} |"
-echo "| Resolved graphite         | ${RESOLVED_GRAPHITE} |"
-echo "| Written to                | status.manageadmin, status.graphite in config.yaml |"
+result "Resolved manageadmin" "${RESOLVED_MANAGEADMIN}"
+result "Resolved graphite"    "${RESOLVED_GRAPHITE}"

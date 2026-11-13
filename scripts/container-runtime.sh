@@ -74,7 +74,9 @@ _parse_container_engine() {
   # read the file (e.g. a malformed value elsewhere) fall back to the
   # block-scoped scan so container.engine is still honored — never silently
   # defaulting to docker when podman was actually requested.
-  if command -v yq &>/dev/null; then
+  # Only the mikefarah yq understands this expression syntax (the python
+  # kislyuk/yq wrapper shares the binary name but not the syntax).
+  if command -v yq &>/dev/null && yq --version 2>/dev/null | grep -q mikefarah; then
     val="$(_normalize_engine_value "$(yq '.container.engine' "${config}" 2>/dev/null || true)")"
   fi
   if [[ -z "${val}" ]]; then
