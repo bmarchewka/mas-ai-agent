@@ -5,7 +5,7 @@ set -euo pipefail
 # mas-manage-db-schema-export.sh — Export DB schema to MANAGE/DBSCHEMA/
 # ---------------------------------------------------------------------------
 # Engine-independent: the target engine is chosen by masManage.database.type
-# in config.yaml. Supported out of the box:
+# (config.local.yaml over config.defaults.yaml). Supported out of the box:
 #   - mssql  (Microsoft SQL Server)  driver: pymssql
 #   - db2    (IBM DB2)               driver: ibm_db / ibm_db_sa
 #   - oracle (Oracle)               driver: oracledb (thin mode, no client)
@@ -16,12 +16,12 @@ set -euo pipefail
 # Docker container (removed on completion), so the host needs only Docker —
 # no local database client or SQL tooling required.
 #
-# masManage.schemaTables in config.yaml selects which tables' schema (DDL) is
+# masManage.schemaTables selects which tables' schema (DDL) is
 # exported: "*" (or the key absent) exports every table and view, while a list
 # such as WORKORDER,ASSET,LOCATIONS exports DDL only for those objects.
 #
 # In addition to the DDL, the full row DATA of the tables listed under
-# masManage.dataTables in config.yaml is exported to
+# masManage.dataTables is exported to
 # MANAGE/DBSCHEMA/data/<TABLE>.csv (one CSV per table, named after the table).
 # CSV is used because it is the most compact and stream-friendly format for
 # large tables (potentially millions of rows) and is read natively by
@@ -33,13 +33,12 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - Container engine (docker | podman)
-#   - yq (mikefarah) or python3, for reading config.yaml
+#   - yq (mikefarah) or python3, for reading the config files
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG="${REPO_ROOT}/config.yaml"
 DBSCHEMA_DIR="${REPO_ROOT}/MANAGE/DBSCHEMA"
 TABLES_DIR="${DBSCHEMA_DIR}/tables"
 VIEWS_DIR="${DBSCHEMA_DIR}/views"
@@ -55,7 +54,7 @@ PYTHON_IMAGE="python:3.12-slim-bookworm"
 
 # shellcheck source=scripts/config-lib.sh
 source "${SCRIPT_DIR}/config-lib.sh"
-config_parser >/dev/null || exit 1
+config_init || exit 1     # config.local.yaml over config.defaults.yaml -> CONFIG
 
 # ---------------------------------------------------------------------------
 # 0. masManage.export gate (default false) — checked before anything else, so
@@ -63,7 +62,7 @@ config_parser >/dev/null || exit 1
 # ---------------------------------------------------------------------------
 EXPORT_ENABLED="$(cfg_bool "${CONFIG}" false masManage export)" || exit 1
 if [[ "${EXPORT_ENABLED}" != "true" ]]; then
-  echo "DB export disabled (masManage.export is not true in config.yaml) — skipping step 5."
+  echo "DB export disabled (masManage.export is not true in ${CONFIG_LABEL}) — skipping step 5."
   echo ""
   echo "| Metric           | Value |"
   echo "|------------------|-------|"
@@ -72,13 +71,13 @@ if [[ "${EXPORT_ENABLED}" != "true" ]]; then
   exit 0
 fi
 
-# Container engine (docker | podman) chosen by container.engine in config.yaml.
+# Container engine (docker | podman) chosen by container.engine.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
 
 # ---------------------------------------------------------------------------
-# 1. Parse DB connection values from config.yaml
+# 1. Parse DB connection values (masManage.database)
 # ---------------------------------------------------------------------------
 # Nested-path lookups via config-lib.sh (yq or python3), so e.g.
 # masManage.database.name can never match another `name:` key in the file.
@@ -97,7 +96,7 @@ parse_selector() {
 
 # ---------------------------------------------------------------------------
 # Optionally load secrets (e.g. MAS_DB_PASSWORD) from a gitignored secrets.env
-# in the repo root, so the DB password need never live in config.yaml. Anything
+# in the repo root, so the DB password need never live in a config file. Anything
 # it defines is exported into the environment for resolve_db_password() below.
 # ---------------------------------------------------------------------------
 SECRETS_FILE="${REPO_ROOT}/secrets.env"
@@ -108,10 +107,10 @@ if [[ -f "${SECRETS_FILE}" ]]; then
   set +a
 fi
 
-# Resolve the DB password WITHOUT requiring plaintext in config.yaml.
+# Resolve the DB password WITHOUT requiring plaintext in a config file.
 # Precedence:
 #   1. MAS_DB_PASSWORD environment variable (incl. anything set in secrets.env).
-#   2. masManage.database.password in config.yaml, which may be:
+#   2. masManage.database.password in config.local.yaml, which may be:
 #        env:VARNAME    -> value of that environment variable
 #        file:/path     -> contents of that file (surrounding whitespace trimmed;
 #                          a leading ~ is expanded to $HOME)
@@ -161,7 +160,7 @@ SCHEMA_TABLES="$(parse_selector schemaTables)"
 if [[ -z "${SCHEMA_TABLES}" ]]; then SCHEMA_TABLES="*"; fi
 
 if [[ -z "${DB_TYPE_RAW}" || -z "${DB_HOST}" || -z "${DB_PORT}" || -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASS}" || -z "${DB_SCHEMA}" ]]; then
-  echo "ERROR: could not read masManage.database fields (type, host, port, name, username, password, schema) from ${CONFIG}" >&2
+  echo "ERROR: could not read masManage.database fields (type, host, port, name, username, password, schema) from ${CONFIG_LABEL}" >&2
   echo "       The password can be supplied via the MAS_DB_PASSWORD env var (or a gitignored secrets.env)," >&2
   echo "       or as masManage.database.password using a literal or an env:VAR / file:/path / cmd:<command> reference." >&2
   exit 1

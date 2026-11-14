@@ -16,7 +16,7 @@ ones) list only the operator images; for those the image is reported as
 digest out of the operator images themselves (see `lookup`). MAS core <= 9.0
 has no Graphite at all, so those core versions are listed but never selectable.
 
-Version specs (per item of config.yaml catalog.operators.<tag>.manage / .core):
+Version specs (per item of catalog.operators.<tag>.manage / .core):
   latest         newest selectable bundle in the package's defaultChannel
   9.2.x | 9.2    newest selectable bundle in channel 9.2.x
   9.3.x-feature  any channel name works the same way

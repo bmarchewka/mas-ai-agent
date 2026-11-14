@@ -7,9 +7,10 @@ container images and your Maximo database. The point is to have a clean, unmodif
 IBM ships so it can be diffed against your local customizations.
 
 Everything runs through a **container engine** — **Docker** or **Podman**, your choice (set
-`container.engine` in [`config.yaml`](config.yaml)) — so you don't need a local Java, Node, or
-database client. The whole pipeline is driven by [`config.yaml`](config.yaml) and the scripts in
-[`scripts/`](scripts/).
+`container.engine` in your `config.local.yaml`) — so you don't need a local Java, Node, or
+database client. The whole pipeline is driven by two config files —
+[`config.defaults.yaml`](config.defaults.yaml) (defaults, tracked) and your own `config.local.yaml`
+(gitignored) — and the scripts in [`scripts/`](scripts/).
 
 > **Agent-agnostic:** any agentic AI (IBM Bob, Claude Code, Codex, …) can run this by following
 > the workflow skill in [`.bob/skills/mas-workflow/SKILL.md`](.bob/skills/mas-workflow/SKILL.md).
@@ -23,8 +24,17 @@ database client. The whole pipeline is driven by [`config.yaml`](config.yaml) an
 > `cp.icr.io` images), and **network access** to your Maximo database. Full details in
 > [Prerequisites](#prerequisites).
 
-Run **`/mas-workflow`** in your AI agent (IBM Bob, Claude Code, …) and it drives the whole pipeline
-for you. The vendor baseline lands in **`MANAGE/<operatorTag>/`** — one `manage-<version>/` folder per
+1. Create your local settings file and set your operator catalog tags / versions (and, for step 5,
+   your database) in it — see [Configuration](#configuration):
+
+   ```bash
+   cp config.local.example.yaml config.local.yaml      # then edit config.local.yaml
+   ```
+
+2. Run **`/mas-workflow`** in your AI agent (IBM Bob, Claude Code, …) and it drives the whole pipeline
+   for you.
+
+The vendor baseline lands in **`MANAGE/<operatorTag>/`** — one `manage-<version>/` folder per
 selected Manage version (SMP tree + Graphite apps) and one `core-<version>/` folder per selected MAS core
 version (Graphite framework) — plus the DB schema in `MANAGE/DBSCHEMA/` (when `masManage.export: true`),
 ready to diff against your customizations or against each other.
@@ -37,14 +47,14 @@ ready to diff against your customizations or against each other.
 |-------------|-----|-------|
 | **A container engine** (running) — Docker **or** Podman | Every step runs inside containers | `docker --version` / `podman --version` |
 | **`cp.icr.io` login** | The `manageadmin` and `graphite` images are IBM-entitled | `docker login cp.icr.io` (or `podman login cp.icr.io`) — username `cp`, password = your IBM entitlement key |
-| **`yq` (mikefarah) or `python3`** | Reading/writing `config.yaml` (operator tag lists, nested `status.operators`) — either one is enough | `yq --version` / `python3 --version` |
+| **`yq` (mikefarah) or `python3`** | Reading and merging the config files, writing `MANAGE/status.yaml` — either one is enough | `yq --version` / `python3 --version` |
 | `python3` *(optional)* | Resolving versions in the operator catalog (step 2). Without it, step 2 runs the resolver in a throwaway `python:3.12-slim-bookworm` container | `python3 --version` |
 | **Network access to the Maximo DB** | Only when `masManage.export: true` — step 5 connects directly to your database (often needs VPN) | `nc -z -w 5 <db-host> <db-port>` |
 
-Pick the engine with `container.engine` in `config.yaml` (`docker` or `podman`; defaults to `docker`).
+Pick the engine with `container.engine` in `config.local.yaml` (`docker` or `podman`; defaults to `docker`).
 
-`prerequisites.sh` checks the configured container engine and the `config.yaml` parser (`yq` or
-`python3`); the registry login and DB reachability are validated when the relevant step actually
+`prerequisites.sh` checks the configured container engine, the config parser (`yq` or `python3`) and
+the config files (it prints a hint when `config.local.yaml` does not exist yet); the registry login and DB reachability are validated when the relevant step actually
 pulls or connects.
 
 ### Why an IBM entitlement key is required
@@ -69,10 +79,59 @@ Get the key from **[myibm.ibm.com → Container software library](https://myibm.
 
 ---
 
-## Configure `config.yaml`
+## Configuration
 
-`config.yaml` has a small `container` toggle plus three sections: you edit `catalog` and
-`masManage`; the `status` section is written for you.
+The settings are split over two files so that your own values never conflict with updates of the
+repository:
+
+| File | In git? | What it holds | Who edits it |
+|------|---------|---------------|--------------|
+| [`config.defaults.yaml`](config.defaults.yaml) | tracked | **Every** setting with its default value and documentation | the project — don't change it for your installation |
+| `config.local.yaml` | **gitignored** | Only the settings **you** change (operator tags, database, …) | you |
+| [`config.local.example.yaml`](config.local.example.yaml) | tracked | A starting point for `config.local.yaml` | — |
+| `MANAGE/status.yaml` | gitignored | The images resolved by step 2 ([details](#managestatusyaml--resolved-images-output-auto-generated)) | the scripts — don't edit it |
+
+Create your local file once:
+
+```bash
+cp config.local.example.yaml config.local.yaml      # then edit it
+```
+
+Every script merges `config.local.yaml` over `config.defaults.yaml`:
+
+- **Maps merge key by key; your value wins.** Set only what differs — e.g. just `masManage.export: true`
+  — and every other key keeps its default.
+- **Lists and single values are replaced as a whole** (`manage: [9.2.x]` replaces the default list,
+  it is not appended to it).
+- **`catalog.operators` (and the legacy `catalog.operatorTag`) is replaced as a whole** when your file
+  sets either, so `config.local.yaml` decides exactly which operator tags run — the default tag does not
+  sneak in.
+- Without a `config.local.yaml` the defaults run as they are (newest Manage / core of the default
+  catalog tag, no DB export).
+
+A minimal `config.local.yaml`:
+
+```yaml
+catalog:
+  operators:
+    v9-261105-amd64:
+      manage: [9.2.x, 9.1.x]
+      core:   [9.2.x, 9.1.x]
+masManage:
+  database:
+    host: db.example.com
+    port: 50000
+    type: db2
+    name: maxdb
+```
+
+**Several setups** (e.g. one per customer): point `MAS_CONFIG` at another local file —
+`MAS_CONFIG=config.local.customer-a.yaml bash scripts/mas-manage-resolve-image.sh`. Any
+`config.local*.yaml` name is gitignored. The merged result the scripts actually read is written to
+`tmp/config.effective.yaml` (`.json` when python3 is the parser) — handy for checking what applies.
+
+The settings are described below. Each snippet shows the keys as you would put them in
+`config.local.yaml`; their defaults and comments are in `config.defaults.yaml`.
 
 ### 1. `container` — which container engine to use (input)
 
@@ -133,7 +192,7 @@ listed digests were checked to be identical for releases where the catalog lists
 
 **MAS core 9.0 and older ships no Graphite** (`graphite-configuration` arrived with 9.1), so `core`
 items such as `9.0.x` — or `latest` in a catalog whose default channel is 9.0.x — are *skipped* with a
-note (recorded as `status.operators.<tag>.skipped.core`), not failed. Manage 9.0 still gets its SMP and
+note (recorded as `status.operators.<tag>.skipped.core` in `MANAGE/status.yaml`), not failed. Manage 9.0 still gets its SMP and
 its Graphite app definitions; there is just no `core-9.0.*` framework folder. An unknown version fails
 and lists the valid versions of its channel. To see what a catalog offers before editing the config:
 
@@ -206,10 +265,11 @@ masManage:
 | `username` | Read user for reflecting the schema. |
 | `password` | The read user's password — **don't put the real secret here**; see below. |
 
-#### Where to put the password (keep the secret out of `config.yaml`)
+#### Where to put the password (keep the secret out of the config files)
 
-`config.yaml` is tracked in git, so the DB password should **not** be stored there in plain text.
-Step 5 resolves the password in this order:
+Even though `config.local.yaml` is gitignored, the DB password should **not** be stored there in plain
+text. The default `password: env:MAS_DB_PASSWORD` reads it from the environment. Step 5 resolves the
+password in this order:
 
 **`MAS_DB_PASSWORD` environment variable** — wins if set. The script also auto-loads a
    **gitignored `secrets.env`** from the repo root, so the easiest setup is:
@@ -272,10 +332,10 @@ every row) and read natively by `head`/`grep`/`awk`, `duckdb`, `pandas`, and AI 
 header row of column names; values use standard CSV quoting (RFC 4180). **SQL `NULL` is written as an
 empty field** (indistinguishable from an empty string — keep that in mind when analysing the data).
 
-### 4. `status` — resolved images (output, auto-generated)
+### `MANAGE/status.yaml` — resolved images (output, auto-generated)
 
 ```yaml
-# !! AUTO-GENERATED — do not edit manually !!
+# !! AUTO-GENERATED by scripts/mas-manage-resolve-image.sh (step 2) — do not edit !!
 status:
   operators:
     v9-261105-amd64:
@@ -296,10 +356,11 @@ status:
           graphite: cp.icr.io/cp/mas/graphite-configuration:2.5.55-amd64@sha256:...
 ```
 
-Written by **step 2**: per operator tag, the resolved versions keyed by operator version, with what you
+Written by **step 2** to `MANAGE/status.yaml` (gitignored, next to the output it describes) and read by
+steps 3–4. Per operator tag it holds the resolved versions keyed by operator version, with what you
 asked for (`requested`), where the catalog has it (`channel`, `bundle`) and the image pinned to an
 immutable `sha256` digest. Items resolving to the same version are merged (`requested: 9.2.x, latest`).
-The block is rebuilt on every run: tags you removed are dropped, and a tag whose catalog cannot be read
+The file is rebuilt on every run: tags you removed are dropped, and a tag whose catalog cannot be read
 keeps its previous entry. Re-run step 2 after changing `catalog.operators`.
 
 ---
@@ -310,7 +371,7 @@ Run the five steps **in order** from the repo root — each depends on the previ
 
 ```bash
 bash scripts/prerequisites.sh                 # 1. Check the container engine + yq/python3
-bash scripts/mas-manage-resolve-image.sh      # 2. Resolve versions per tag -> status.operators.<tag>
+bash scripts/mas-manage-resolve-image.sh      # 2. Resolve versions per tag -> MANAGE/status.yaml
 bash scripts/mas-manage-SMP-extract.sh        # 3. Copy /opt/IBM/SMP  -> MANAGE/<tag>/manage-<ver>/SMP/
 bash scripts/mas-manage-graphite-extract.sh   # 4. @maximo -> core-<ver>/GRAPHITE/, apps -> manage-<ver>/GRAPHITE/apps/
 bash scripts/mas-manage-db-schema-export.sh   # 5. Export DB schema -> MANAGE/DBSCHEMA/ (only if masManage.export: true)
@@ -328,8 +389,8 @@ re-mirror the `SMP` and `GRAPHITE` folders they write, and step 5 clears and rew
 
 | # | Script | Action |
 |---|--------|--------|
-| 1 | `prerequisites.sh` | Verifies the configured container engine (`docker` or `podman`) is on `PATH`, and that `yq` or `python3` is available. |
-| 2 | `mas-manage-resolve-image.sh` | For each operator tag: pulls the operator catalog and resolves the `manage` / `core` version lists to `manageadmin` / `graphite-configuration` images, written to `status.operators.<tag>`. `--list-versions` shows what a catalog offers. |
+| 1 | `prerequisites.sh` | Verifies the configured container engine (`docker` or `podman`) is on `PATH`, that `yq` or `python3` is available, and that the config files are in place (hints at `cp config.local.example.yaml config.local.yaml` when there is no local file). |
+| 2 | `mas-manage-resolve-image.sh` | For each operator tag: pulls the operator catalog and resolves the `manage` / `core` version lists to `manageadmin` / `graphite-configuration` images, written to `status.operators.<tag>` in `MANAGE/status.yaml`. `--list-versions` shows what a catalog offers. |
 | 3 | `mas-manage-SMP-extract.sh` | For each tag and Manage version: copies `/opt/IBM/SMP/` from the `manageadmin` image verbatim (compiled `.class` files kept as-is) to `MANAGE/<tag>/manage-<version>/SMP/`. If the identical image (same digest) was already extracted elsewhere, it copies locally instead. |
 | 4 | `mas-manage-graphite-extract.sh` | Part A, for each tag and core version: copies `/graphite/node_modules/@maximo` from the graphite image to `MANAGE/<tag>/core-<version>/`. Part B, for each Manage version: unzips the Graphite app ZIPs from its SMP tree. |
 | 5 | `mas-manage-db-schema-export.sh` | **Only when `masManage.export: true`** (otherwise skipped). Reflects the database schema with SQLAlchemy inside a throwaway `python:3.12-slim-bookworm` container and writes one `.sql` file per table and view (limited to `masManage.schemaTables`). Also exports full row data (CSV) for any tables listed in `masManage.dataTables`. |
@@ -340,6 +401,7 @@ re-mirror the `SMP` and `GRAPHITE` folders they write, and step 5 clears and rew
 
 | Path | Produced by | Contents |
 |------|-------------|----------|
+| `MANAGE/status.yaml` | Step 2 | Resolved catalog / bundle / image per tag and version (read by steps 3–4). |
 | `MANAGE/<tag>/manage-<version>/SMP/` | Step 3 | Full SMP tree of that Manage version, including `.class` files. |
 | `MANAGE/<tag>/manage-<version>/GRAPHITE/apps/<app>/` | Step 4 | One folder per unzipped Graphite app definition of that Manage version. |
 | `MANAGE/<tag>/core-<version>/GRAPHITE/node_modules/@maximo/` | Step 4 | Graphite `@maximo` framework of that MAS core version. |

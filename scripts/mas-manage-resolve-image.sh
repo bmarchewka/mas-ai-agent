@@ -5,7 +5,8 @@ set -euo pipefail
 # mas-manage-resolve-image.sh — Resolve the selected Manage and MAS core
 # versions of every operator catalog tag to image references
 # ---------------------------------------------------------------------------
-# config.yaml selects, per operator catalog tag, which versions to extract:
+# catalog.operators (config.local.yaml over config.defaults.yaml) selects, per
+# operator catalog tag, which versions to extract:
 #
 #   catalog:
 #     operatorImage: icr.io/cpopen/ibm-maximo-operator-catalog
@@ -22,7 +23,8 @@ set -euo pipefail
 #
 # For each tag the OLM file-based catalog image (<operatorImage>:<tag>) is
 # pulled, /catalog/ibm-mas-manage/ and /catalog/ibm-mas/ are copied out and the
-# specs are resolved by scripts/catalog_resolve.py. Results are written to:
+# specs are resolved by scripts/catalog_resolve.py. Results are written to the
+# generated, gitignored MANAGE/status.yaml:
 #
 #   status:
 #     operators:
@@ -48,18 +50,19 @@ set -euo pipefail
 #             create + cp; nothing is run), images pulled for this are removed
 #             again, and results are cached in tmp/image-trace/.
 #
-# The status block is rebuilt on every run: tags no longer configured are
+# The status file is rebuilt on every run: tags no longer configured are
 # dropped, and a tag whose catalog cannot be read keeps its previous entry.
 #
 # Usage:
 #   mas-manage-resolve-image.sh [--tag <operatorTag>]...
 #   mas-manage-resolve-image.sh --list-versions [--tag <operatorTag>]...
-#       print the selectable Manage / core versions of each catalog; config.yaml
-#       is not changed.
+#       print the selectable Manage / core versions of each catalog;
+#       MANAGE/status.yaml is not changed.
 # ---------------------------------------------------------------------------
 # Prerequisites:
 #   - Container engine (docker | podman)
-#   - yq (mikefarah) or python3, for reading/writing config.yaml
+#   - yq (mikefarah) or python3, for reading the config files and writing
+#     MANAGE/status.yaml
 #   - python3 for catalog resolution (falls back to a python container)
 #   - an IBM entitlement login (`<engine> login cp.icr.io`) for tracing images
 #     of older catalogs (the operator sub-images are in cp.icr.io)
@@ -68,14 +71,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG="${REPO_ROOT}/config.yaml"
 RESOLVER="${SCRIPT_DIR}/catalog_resolve.py"
 
 # shellcheck source=scripts/config-lib.sh
 source "${SCRIPT_DIR}/config-lib.sh"
-config_parser >/dev/null || exit 1
+config_init || exit 1     # config.local.yaml over config.defaults.yaml -> CONFIG
 
-# Container engine (docker | podman) chosen by container.engine in config.yaml.
+# Container engine (docker | podman) chosen by container.engine.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
@@ -83,7 +85,7 @@ export CONTAINER_ENGINE
 
 OPERATOR_IMAGE="$(cfg_get "${CONFIG}" catalog operatorImage)"
 if [[ -z "${OPERATOR_IMAGE}" ]]; then
-  echo "ERROR: could not read catalog.operatorImage from ${CONFIG}" >&2
+  echo "ERROR: could not read catalog.operatorImage from ${CONFIG_LABEL}" >&2
   exit 1
 fi
 
@@ -111,17 +113,17 @@ if [[ -z "${MAS_CHILD_TAG:-}" ]]; then
     else
       # Not run this time, or its catalog could not be read: keep the previous
       # entry when it is in the current (manage/core) format.
-      prev="$(cfg_rows "${CONFIG}" status operators "${tag}" | sed 's/^status\t//')"
+      prev="$(cfg_rows "${STATUS_FILE}" status operators "${tag}" | sed 's/^status\t//')"
       if printf '%s\n' "${prev}" | grep -qE $'^operators\t[^\t]+\t(manage|core)\t'; then
         printf '%s\n' "${prev}" >> "${STATUS_ROWS}"
         KEPT="${KEPT}${tag} "
       fi
     fi
   done <<< "$(operator_tags "${CONFIG}")"
-  write_status "${CONFIG}" < "${STATUS_ROWS}"
+  write_status < "${STATUS_ROWS}"
 
   echo ""
-  echo "Written status.operators in config.yaml.${KEPT:+ Kept previous entries for: ${KEPT}}"
+  echo "Written status.operators to MANAGE/status.yaml.${KEPT:+ Kept previous entries for: ${KEPT}}"
   print_run_summary
   exit "${RUN_RC}"
 fi
