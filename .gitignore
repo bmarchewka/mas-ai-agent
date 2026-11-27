@@ -1,5 +1,9 @@
 MANAGE/
 tmp/
+# Local settings, merged over the tracked config.defaults.yaml.
+# Template: config.local.example.yaml
+config.local*.yaml
+!config.local.example.yaml
 # Local secrets (DB password etc.) — never commit. Template: secrets.env.example
 secrets.env
 .env

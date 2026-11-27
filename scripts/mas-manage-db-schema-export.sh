@@ -5,7 +5,7 @@ set -euo pipefail
 # mas-manage-db-schema-export.sh — Export DB schema to MANAGE/DBSCHEMA/
 # ---------------------------------------------------------------------------
 # Engine-independent: the target engine is chosen by masManage.database.type
-# in config.yaml. Supported out of the box:
+# (config.local.yaml over config.defaults.yaml). Supported out of the box:
 #   - mssql  (Microsoft SQL Server)  driver: pymssql
 #   - db2    (IBM DB2)               driver: ibm_db / ibm_db_sa
 #   - oracle (Oracle)               driver: oracledb (thin mode, no client)
@@ -16,25 +16,29 @@ set -euo pipefail
 # Docker container (removed on completion), so the host needs only Docker —
 # no local database client or SQL tooling required.
 #
-# masManage.schemaTables in config.yaml selects which tables' schema (DDL) is
+# masManage.schemaTables selects which tables' schema (DDL) is
 # exported: "*" (or the key absent) exports every table and view, while a list
 # such as WORKORDER,ASSET,LOCATIONS exports DDL only for those objects.
 #
 # In addition to the DDL, the full row DATA of the tables listed under
-# masManage.dataTables in config.yaml is exported to
+# masManage.dataTables is exported to
 # MANAGE/DBSCHEMA/data/<TABLE>.csv (one CSV per table, named after the table).
 # CSV is used because it is the most compact and stream-friendly format for
 # large tables (potentially millions of rows) and is read natively by
 # pandas / duckdb / awk and by AI agents. SQL NULL is written as an empty field.
 #
+# The whole step is gated by masManage.export (default: false). When it is not
+# true, the script exits successfully without touching the database, the
+# container engine or MANAGE/DBSCHEMA/.
+#
 # Prerequisites:
-#   - Docker
+#   - Container engine (docker | podman)
+#   - yq (mikefarah) or python3, for reading the config files
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG="${REPO_ROOT}/config.yaml"
 DBSCHEMA_DIR="${REPO_ROOT}/MANAGE/DBSCHEMA"
 TABLES_DIR="${DBSCHEMA_DIR}/tables"
 VIEWS_DIR="${DBSCHEMA_DIR}/views"
@@ -48,99 +52,51 @@ DATA_DIR="${DBSCHEMA_DIR}/data"
 # there, so the libxml2 install the DB2 driver needs succeeds.
 PYTHON_IMAGE="python:3.12-slim-bookworm"
 
-# Container engine (docker | podman) chosen by container.engine in config.yaml.
+# shellcheck source=scripts/config-lib.sh
+source "${SCRIPT_DIR}/config-lib.sh"
+config_init || exit 1     # config.local.yaml over config.defaults.yaml -> CONFIG
+
+# ---------------------------------------------------------------------------
+# 0. masManage.export gate (default false) — checked before anything else, so
+#    a skipped step needs no DB credentials and no container engine.
+# ---------------------------------------------------------------------------
+EXPORT_ENABLED="$(cfg_bool "${CONFIG}" false masManage export)" || exit 1
+if [[ "${EXPORT_ENABLED}" != "true" ]]; then
+  echo "DB export disabled (masManage.export is not true in ${CONFIG_LABEL}) — skipping step 5."
+  echo ""
+  echo "| Metric           | Value |"
+  echo "|------------------|-------|"
+  echo "| Status           | Skipped (masManage.export = false) |"
+  echo "| Output directory | MANAGE/DBSCHEMA/ (unchanged) |"
+  exit 0
+fi
+
+# Container engine (docker | podman) chosen by container.engine.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
 
 # ---------------------------------------------------------------------------
-# 1. Parse DB connection values from config.yaml
+# 1. Parse DB connection values (masManage.database)
 # ---------------------------------------------------------------------------
+# Nested-path lookups via config-lib.sh (yq or python3), so e.g.
+# masManage.database.name can never match another `name:` key in the file.
 parse_value() {
-  local key="$1"
-  if command -v yq &>/dev/null; then
-    yq "${key}" "${CONFIG}"
-  elif command -v python3 &>/dev/null; then
-    python3 - "${CONFIG}" "${key}" <<'EOF'
-import sys, re
-with open(sys.argv[1]) as f:
-    content = f.read()
-leaf = sys.argv[2].split('.')[-1]
-match = re.search(r'^\s*' + re.escape(leaf) + r':\s*(.+)$', content, re.MULTILINE)
-if match:
-    print(match.group(1).strip())
-else:
-    sys.exit(f"ERROR: could not parse {sys.argv[2]} from config.yaml")
-EOF
-  else
-    grep -E "^\s*${key##*.}:" "${CONFIG}" \
-      | awk -F': ' '{print $2}' \
-      | awk '{print $1}'
-  fi
+  cfg_get "${CONFIG}" masManage database "$1"
 }
 
-# Parse a table selector (e.g. masManage.schemaTables or masManage.dataTables)
-# into a comma-separated string. Accepts a scalar ("*" or a comma-separated
-# list), a YAML flow sequence ([A, B, C]) or a YAML block list; "" when the key
-# is absent/empty. Callers decide what an empty result means (schemaTables ->
-# all; dataTables -> none).
-#   $1 = yq-style path, e.g. .masManage.dataTables
+# Parse a table selector (masManage.schemaTables / masManage.dataTables) into a
+# comma-separated string. Accepts a scalar ("*" or a comma-separated list), a
+# YAML flow sequence ([A, B, C]) or a YAML block list; "" when the key is
+# absent/empty. Callers decide what an empty result means (schemaTables -> all;
+# dataTables -> none).
 parse_selector() {
-  local path="$1"
-  local leaf="${path##*.}"
-  local out=""
-  if command -v yq &>/dev/null; then
-    out="$(yq "[${path}] | flatten | join(\",\")" "${CONFIG}" 2>/dev/null || true)"
-  elif command -v python3 &>/dev/null; then
-    out="$(python3 - "${CONFIG}" "${leaf}" <<'EOF'
-import sys, re
-with open(sys.argv[1]) as f:
-    lines = f.readlines()
-key = sys.argv[2]
-val, items, in_list = None, [], False
-for line in lines:
-    m = re.match(r'^\s*' + re.escape(key) + r'\s*:\s*(.*)$', line)
-    if m and not in_list and val is None and not items:
-        inline = re.sub(r'\s+#.*$', '', m.group(1)).strip()
-        if inline.startswith('[') and inline.endswith(']'):
-            # YAML flow sequence, e.g. [A, B, C]
-            val = ','.join(p.strip().strip('"').strip("'")
-                           for p in inline[1:-1].split(',') if p.strip())
-            break
-        inline = inline.strip('"').strip("'")
-        if inline:
-            val = inline
-            break
-        in_list = True
-        continue
-    if in_list:
-        lm = re.match(r'^\s*-\s*(.+?)\s*$', line)
-        if lm:
-            items.append(lm.group(1).strip().strip('"').strip("'"))
-        elif line.strip() == '':
-            continue
-        else:
-            break
-print(val if val is not None else ','.join(items))
-EOF
-)"
-  else
-    # Degraded fallback (no yq/python3): handles scalar, comma list and flow
-    # sequence on one line; strips quotes, brackets and spaces. Block lists
-    # need yq or python3.
-    out="$(grep -E "^[[:space:]]*${leaf}:" "${CONFIG}" | head -1 \
-      | sed -E "s/^[[:space:]]*${leaf}:[[:space:]]*//; s/[[:space:]]*#.*$//" \
-      | tr -d "\042\047[] " || true)"
-  fi
-  if [[ "${out}" == "null" ]]; then
-    out=""
-  fi
-  printf '%s' "${out}"
+  cfg_list "${CONFIG}" masManage "$1" | paste -sd, -
 }
 
 # ---------------------------------------------------------------------------
 # Optionally load secrets (e.g. MAS_DB_PASSWORD) from a gitignored secrets.env
-# in the repo root, so the DB password need never live in config.yaml. Anything
+# in the repo root, so the DB password need never live in a config file. Anything
 # it defines is exported into the environment for resolve_db_password() below.
 # ---------------------------------------------------------------------------
 SECRETS_FILE="${REPO_ROOT}/secrets.env"
@@ -151,10 +107,10 @@ if [[ -f "${SECRETS_FILE}" ]]; then
   set +a
 fi
 
-# Resolve the DB password WITHOUT requiring plaintext in config.yaml.
+# Resolve the DB password WITHOUT requiring plaintext in a config file.
 # Precedence:
 #   1. MAS_DB_PASSWORD environment variable (incl. anything set in secrets.env).
-#   2. masManage.database.password in config.yaml, which may be:
+#   2. masManage.database.password in config.local.yaml, which may be:
 #        env:VARNAME    -> value of that environment variable
 #        file:/path     -> contents of that file (surrounding whitespace trimmed;
 #                          a leading ~ is expanded to $HOME)
@@ -171,7 +127,7 @@ resolve_db_password() {
     return 0
   fi
   local raw
-  raw="$(parse_value '.masManage.database.password')"
+  raw="$(parse_value password)"
   case "${raw}" in
     env:*)
       local var="${raw#env:}"
@@ -191,20 +147,20 @@ resolve_db_password() {
   esac
 }
 
-DB_TYPE_RAW="$(parse_value '.masManage.database.type')"
-DB_HOST="$(parse_value '.masManage.database.host')"
-DB_PORT="$(parse_value '.masManage.database.port')"
-DB_NAME="$(parse_value '.masManage.database.name')"
-DB_USER="$(parse_value '.masManage.database.username')"
+DB_TYPE_RAW="$(parse_value type)"
+DB_HOST="$(parse_value host)"
+DB_PORT="$(parse_value port)"
+DB_NAME="$(parse_value name)"
+DB_USER="$(parse_value username)"
 DB_PASS="$(resolve_db_password)"
-DB_SCHEMA="$(parse_value '.masManage.database.schema')"
-DATA_TABLES="$(parse_selector '.masManage.dataTables')"
-SCHEMA_TABLES="$(parse_selector '.masManage.schemaTables')"
+DB_SCHEMA="$(parse_value schema)"
+DATA_TABLES="$(parse_selector dataTables)"
+SCHEMA_TABLES="$(parse_selector schemaTables)"
 # schemaTables defaults to all tables when unset; dataTables defaults to none.
 if [[ -z "${SCHEMA_TABLES}" ]]; then SCHEMA_TABLES="*"; fi
 
 if [[ -z "${DB_TYPE_RAW}" || -z "${DB_HOST}" || -z "${DB_PORT}" || -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASS}" || -z "${DB_SCHEMA}" ]]; then
-  echo "ERROR: could not read masManage.database fields (type, host, port, name, username, password, schema) from ${CONFIG}" >&2
+  echo "ERROR: could not read masManage.database fields (type, host, port, name, username, password, schema) from ${CONFIG_LABEL}" >&2
   echo "       The password can be supplied via the MAS_DB_PASSWORD env var (or a gitignored secrets.env)," >&2
   echo "       or as masManage.database.password using a literal or an env:VAR / file:/path / cmd:<command> reference." >&2
   exit 1

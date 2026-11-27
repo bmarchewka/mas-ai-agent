@@ -2,127 +2,159 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# mas-manage-graphite-extract.sh — Copy /graphite/node_modules/@maximo from
-# the graphite-configuration container to local GRAPHITE/node_modules/@maximo
+# mas-manage-graphite-extract.sh — Graphite extraction, in two parts:
+#   A. For every resolved MAS core version: copy /graphite/node_modules/@maximo
+#      from its graphite-configuration image into
+#      MANAGE/<tag>/core-<version>/GRAPHITE/node_modules/@maximo
+#   B. For every resolved Manage version: unzip the Graphite app definitions
+#      shipped in its SMP tree into MANAGE/<tag>/manage-<version>/GRAPHITE/apps/
+# ---------------------------------------------------------------------------
+# Versions come from status.operators.<tag>.core / .manage (written by step 2).
+# Part B needs step 3 (SMP extract) to have run. Output folders are cleared
+# first, so they mirror the images exactly. A core image already extracted in
+# another folder (same digest) is copied locally instead of from a container.
+#
+# Usage: mas-manage-graphite-extract.sh [--tag <operatorTag>]... [--version <version>]...
+#        (--version filters both core and Manage versions)
 # ---------------------------------------------------------------------------
 # Prerequisites:
-#   - Docker
+#   - Container engine (docker | podman)
+#   - yq (mikefarah) or python3, for reading the config files
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG="${REPO_ROOT}/config.yaml"
-OUTPUT_DIR="${REPO_ROOT}/MANAGE/GRAPHITE/node_modules/@maximo"
+# shellcheck source=scripts/config-lib.sh
+source "${SCRIPT_DIR}/config-lib.sh"
+config_init || exit 1     # config.local.yaml over config.defaults.yaml -> CONFIG
 
-# Container engine (docker | podman) chosen by container.engine in config.yaml.
+# Container engine (docker | podman) chosen by container.engine.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
 
+# Parent run: part A over (tag, core version), then part B over
+# (tag, Manage version); one summary table each.
+if [[ -z "${MAS_CHILD_TAG:-}" ]]; then
+  echo "### Part A — Graphite @maximo framework (MAS core versions)"
+  run_units "${BASH_SOURCE[0]}" core "$@"
+  print_run_summary
+  echo ""
+  echo "### Part B — Graphite app definitions (Manage versions)"
+  run_units "${BASH_SOURCE[0]}" manage "$@"
+  print_run_summary
+  exit "${RUN_RC}"
+fi
+
+TAG="${MAS_CHILD_TAG}"
+KIND="${MAS_CHILD_KIND}"
+VERSION="${MAS_CHILD_VERSION}"
+UNIT_DIR="$(unit_dir "${REPO_ROOT}" "${TAG}" "${KIND}" "${VERSION}")"
+UNIT_REL="${UNIT_DIR#"${REPO_ROOT}/"}"
+
 # ---------------------------------------------------------------------------
-# 1. Parse image reference from config.yaml
+# Part A child: one (tag, core version)
 # ---------------------------------------------------------------------------
-parse_image() {
-  if command -v yq &>/dev/null; then
-    yq '.status.graphite' "${CONFIG}"
-  elif command -v python3 &>/dev/null; then
-    python3 - "${CONFIG}" <<'EOF'
-import sys, re
+if [[ "${KIND}" == "core" ]]; then
+  GRAPHITE_DIR="${UNIT_DIR}/GRAPHITE"
+  OUTPUT_DIR="${GRAPHITE_DIR}/node_modules/@maximo"
+  MARKER="${UNIT_DIR}/.graphite-source"
+  CONTAINER_NAME="mas-manage-graphite-${TAG}-${VERSION}"
 
-with open(sys.argv[1]) as f:
-    lines = f.readlines()
-
-in_status = False
-for line in lines:
-    if re.match(r'^status\s*:', line):
-        in_status = True
-        continue
-    if in_status:
-        if re.match(r'^\S', line) and not re.match(r'^\s', line):
-            break
-        m = re.match(r'^\s+graphite:\s*(.+)$', line)
-        if m:
-            val = m.group(1).strip().strip('"')
-            if val:
-                print(val)
-                sys.exit(0)
-
-sys.exit("ERROR: could not parse status.graphite from config.yaml")
-EOF
-  else
-    grep -A5 '^status:' "${CONFIG}" \
-      | grep 'graphite:' \
-      | awk -F': ' '{print $2}' \
-      | awk '{print $1}'
+  IMAGE="$(status_field "${TAG}" core "${VERSION}" graphite)"
+  if [[ -z "${IMAGE}" ]]; then
+    echo "ERROR: status.operators.${TAG}.core.${VERSION}.graphite is not set in MANAGE/status.yaml." >&2
+    echo "       Run scripts/mas-manage-resolve-image.sh first." >&2
+    exit 1
   fi
-}
+  echo "Image: ${IMAGE}"
+  result "Image" "${IMAGE}"
 
-IMAGE="$(parse_image)"
-if [[ -z "${IMAGE}" ]]; then
-  echo "ERROR: could not read status.graphite from ${CONFIG}. Run scripts/mas-manage-resolve-image.sh first." >&2
+  REUSE_FROM=""
+  for other_marker in "${REPO_ROOT}"/MANAGE/*/core-*/.graphite-source; do
+    [[ -f "${other_marker}" ]] || continue
+    other_dir="$(dirname "${other_marker}")"
+    [[ "${other_dir}" == "${UNIT_DIR}" ]] && continue
+    if [[ -d "${other_dir}/GRAPHITE/node_modules/@maximo" && "$(cat "${other_marker}")" == "${IMAGE}" ]]; then
+      REUSE_FROM="${other_dir}"
+      break
+    fi
+  done
+
+  rm -f "${MARKER}"
+  rm -rf "${GRAPHITE_DIR}"
+  mkdir -p "${OUTPUT_DIR}"
+
+  if [[ -n "${REUSE_FROM}" ]]; then
+    echo "Same graphite image already extracted in ${REUSE_FROM#"${REPO_ROOT}/"} — copying locally ..."
+    cp -Rp "${REUSE_FROM}/GRAPHITE/node_modules/@maximo/." "${OUTPUT_DIR}/"
+    CONTAINER_LABEL="(copied from ${REUSE_FROM#"${REPO_ROOT}/"})"
+  else
+    echo "Pulling image (no-op if already cached) ..."
+    "${CONTAINER_ENGINE}" pull "${IMAGE}" 2>&1 | tail -1
+    # `<engine> cp` does not handle relative symlinks that point outside the
+    # extracted tree (common in node_modules/.bin). tar inside a short-lived
+    # --rm container piped to local tar avoids this limitation entirely.
+    echo "Copying /graphite/node_modules/@maximo from container (this may take a while) ..."
+    "${CONTAINER_ENGINE}" run --rm --name "${CONTAINER_NAME}" \
+      "${IMAGE}" \
+      tar -C /graphite/node_modules -cf - @maximo \
+      | tar -xf - -C "$(dirname "${OUTPUT_DIR}")"
+    CONTAINER_LABEL="${CONTAINER_NAME} (--rm)"
+  fi
+  echo "Copy complete."
+  printf '%s\n' "${IMAGE}" > "${MARKER}"
+
+  cat > "${UNIT_DIR}/images.yaml" <<EOF
+# Generated by mas-agent — what this folder was extracted from.
+operatorTag: "${TAG}"
+catalogImage: "$(status_get "${TAG}" catalogImage)"
+package: ibm-mas
+version: "${VERSION}"
+requested: "$(status_field "${TAG}" core "${VERSION}" requested)"
+channel: "$(status_field "${TAG}" core "${VERSION}" channel)"
+bundle: "$(status_field "${TAG}" core "${VERSION}" bundle)"
+source: "$(status_field "${TAG}" core "${VERSION}" source)"
+graphite: "${IMAGE}"
+EOF
+
+  FILE_COUNT="$(find "${OUTPUT_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  result "Container"        "${CONTAINER_LABEL}"
+  result "Files copied"     "${FILE_COUNT}"
+  result "Output directory" "${UNIT_REL}/GRAPHITE/node_modules/@maximo"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Part B child: one (tag, Manage version) — unzip app definitions from its SMP
+# ---------------------------------------------------------------------------
+APPS_SRC="${UNIT_DIR}/SMP/maximo/tools/maximo/en/graphite/apps"
+APPS_OUT="${UNIT_DIR}/GRAPHITE/apps"
+
+if [[ ! -d "${APPS_SRC}" ]]; then
+  echo "ERROR: Graphite apps source not found at ${APPS_SRC#"${REPO_ROOT}/"}." >&2
+  echo "       Run scripts/mas-manage-SMP-extract.sh --tag ${TAG} --version ${VERSION} first." >&2
   exit 1
 fi
 
-echo "Image: ${IMAGE}"
-
-# ---------------------------------------------------------------------------
-# 2. Pull image (no-op if already cached)
-# ---------------------------------------------------------------------------
-echo "Pulling image (no-op if already cached) ..."
-"${CONTAINER_ENGINE}" pull "${IMAGE}" 2>&1 | tail -1
-
-# ---------------------------------------------------------------------------
-# 3. Copy /graphite/node_modules/@maximo via tar (handles node_modules symlinks)
-# ---------------------------------------------------------------------------
-# `<engine> cp` does not handle relative symlinks that point outside the
-# extracted tree (common in node_modules/.bin). Using tar inside a short-lived
-# --rm container piped to local tar avoids this limitation entirely.
-mkdir -p "${OUTPUT_DIR}"
-echo "Copying /graphite/node_modules/@maximo from container (this may take a while) ..."
-"${CONTAINER_ENGINE}" run --rm --name mas-manage-graphite \
-  "${IMAGE}" \
-  tar -C /graphite/node_modules -cf - @maximo \
-  | tar -xf - -C "$(dirname "${OUTPUT_DIR}")"
-echo "Copy complete."
-
-# ---------------------------------------------------------------------------
-# 4. Unzip Graphite app definitions from SMP into MANAGE/GRAPHITE/apps/
-# ---------------------------------------------------------------------------
-APPS_SRC="${REPO_ROOT}/MANAGE/SMP/maximo/tools/maximo/en/graphite/apps"
-APPS_OUT="${REPO_ROOT}/MANAGE/GRAPHITE/apps"
-
+rm -rf "${APPS_OUT}"
+mkdir -p "${APPS_OUT}"
 APP_COUNT=0
-if [[ -d "${APPS_SRC}" ]]; then
-  mkdir -p "${APPS_OUT}"
-  echo "Unzipping Graphite app definitions from ${APPS_SRC} ..."
-  while IFS= read -r -d '' zip_file; do
-    app_name="$(basename "${zip_file}" .zip)"
-    dest="${APPS_OUT}/${app_name}"
-    mkdir -p "${dest}"
-    unzip -q -o "${zip_file}" -d "${dest}"
-    APP_COUNT=$((APP_COUNT + 1))
-    # Also unzip app-source.zip if present inside the extracted app directory
-    if [[ -f "${dest}/app-source.zip" ]]; then
-      unzip -q -o "${dest}/app-source.zip" -d "${dest}"
-    fi
-  done < <(find "${APPS_SRC}" -maxdepth 1 -name "*.zip" -print0 | sort -z)
-  echo "Unzipped ${APP_COUNT} app(s) to ${APPS_OUT}."
-else
-  echo "WARNING: Graphite apps source not found at ${APPS_SRC}. Skipping unzip step."
-fi
+echo "Unzipping Graphite app definitions from ${APPS_SRC#"${REPO_ROOT}/"} ..."
+while IFS= read -r -d '' zip_file; do
+  app_name="$(basename "${zip_file}" .zip)"
+  dest="${APPS_OUT}/${app_name}"
+  mkdir -p "${dest}"
+  unzip -q -o "${zip_file}" -d "${dest}"
+  APP_COUNT=$((APP_COUNT + 1))
+  # Also unzip app-source.zip if present inside the extracted app directory
+  if [[ -f "${dest}/app-source.zip" ]]; then
+    unzip -q -o "${dest}/app-source.zip" -d "${dest}"
+  fi
+done < <(find "${APPS_SRC}" -maxdepth 1 -name "*.zip" -print0 | sort -z)
+echo "Unzipped ${APP_COUNT} app(s)."
 
-# ---------------------------------------------------------------------------
-# 5. Summary
-# ---------------------------------------------------------------------------
-FILE_COUNT="$(find "${OUTPUT_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
-
-echo ""
-echo "| Metric           | Value |"
-echo "|------------------|-------|"
-echo "| Image            | ${IMAGE} |"
-echo "| Container        | mas-manage-graphite (--rm) |"
-echo "| Files copied     | ${FILE_COUNT} |"
-echo "| Output directory | MANAGE/GRAPHITE/node_modules/@maximo |"
-echo "| Apps unzipped    | ${APP_COUNT} |"
-echo "| Apps directory   | MANAGE/GRAPHITE/apps |"
+result "Source"         "${UNIT_REL}/SMP/…/graphite/apps"
+result "Apps unzipped"  "${APP_COUNT}"
+result "Apps directory" "${UNIT_REL}/GRAPHITE/apps"

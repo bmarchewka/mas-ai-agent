@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# config.defaults.yaml — every mas-agent setting with its default value
+# ---------------------------------------------------------------------------
+# This file is tracked in git and documents all settings. Do NOT edit it for
+# your installation. Put your own values in config.local.yaml (gitignored):
+#
+#   cp config.local.example.yaml config.local.yaml
+#
+# config.local.yaml only needs the keys you change. The scripts merge it over
+# this file:
+#   - maps merge key by key, and the value in config.local.yaml wins
+#   - lists and single values are replaced as a whole
+#   - catalog.operators (and the legacy catalog.operatorTag) are replaced as a
+#     whole when config.local.yaml sets either, so your file decides exactly
+#     which operator tags run
+# MAS_CONFIG=/path/to/other.yaml uses another local file instead of
+# config.local.yaml (e.g. one file per customer).
+#
+# The images resolved by step 2 are written to MANAGE/status.yaml (generated,
+# gitignored) — not to a config file.
+# ---------------------------------------------------------------------------
+
+# Container engine used for every workflow step (all steps run through
+# containers). Docker and Podman are supported; they share the same CLI, so
+# switching engines needs no other change.
+#   engine: docker | podman   (default: docker when this section is omitted)
+container:
+  engine: docker
+
+# MAS Manage image references
+# catalog.operators lists the operator catalog release(s) (tags of operatorImage)
+# to read, and per tag which versions to extract:
+#   manage: Manage operator versions -> SMP + Graphite apps   (steps 3-4)
+#   core:   MAS core versions        -> Graphite @maximo      (step 4)
+# Each list item can be:
+#   latest   newest stable version in the catalog's defaultChannel
+#   9.2.x    newest version in that channel (also 9.2, or a channel name such
+#            as 9.3.x-feature for pre-releases)
+#   9.2.4    that exact version
+# Omitting manage or core (or leaving the tag empty) means [latest].
+# MAS core 9.0 and older ships no Graphite: such core items are skipped.
+# Each version lands in MANAGE/<tag>/manage-<version>/ or MANAGE/<tag>/core-<version>/.
+# See what a catalog offers: bash scripts/mas-manage-resolve-image.sh --list-versions
+# Example (in config.local.yaml):
+#   catalog:
+#     operators:
+#       v9-250403-amd64:
+#         manage: [9.0.x]
+#       v9-261105-amd64:
+#         manage: [9.2.x, 9.1.x]
+#         core:   [9.2.x, 9.1.x]
+# The legacy form operatorTag: [tag, ...] still works and means [latest] for
+# both lists.
+catalog:
+  operatorImage: icr.io/cpopen/ibm-maximo-operator-catalog
+  operators:
+    v9-261105-amd64:
+      manage: [latest]
+      core: [latest]
+
+masManage:
+  # Run step 5 (DB schema DDL + selected table data export)?
+  #   false -> skip step 5 entirely (default; also when omitted)
+  #   true  -> connect to masManage.database and export schemaTables / dataTables
+  export: false
+  # Your Maximo database (set these in config.local.yaml).
+  database:
+    host:
+    # SQL Server 1433, DB2 50000, Oracle 1521
+    port:
+    # engine options: mssql | db2 | oracle
+    type:
+    # database name (SQL Server / DB2) or Oracle service name
+    name:
+    schema: maximo
+    username: maximo
+    # DB password. Never store the secret in a config file in plain text —
+    # prefer one of:
+    #   env:VARNAME    -> read from that environment variable (default below)
+    #   file:/path     -> read from a file (~ is expanded)
+    #   cmd:<command>  -> run a command and use its output (e.g. an OS keychain)
+    # A bare literal still works but is discouraged. The MAS_DB_PASSWORD env var
+    # (e.g. set in the gitignored secrets.env) overrides whatever is set here.
+    password: env:MAS_DB_PASSWORD
+  # Which tables' schema (DDL) to export in step 5.
+  #   "*"                            -> all tables and views (default; also if omitted)
+  #   [WORKORDER, ASSET, LOCATIONS]  -> only these tables (YAML list)
+  # Names are matched case-insensitively.
+  schemaTables: "*"
+  # Full row DATA exported to MANAGE/DBSCHEMA/data/<TABLE>.csv (in addition to
+  # the DDL). Same forms as schemaTables:
+  #   [MAXRELATIONSHIP, WORKORDER]   -> only these tables (YAML list)
+  #   "*"                            -> data for ALL tables (can be very large!)
+  # Empty (the default) exports DDL only (no data). Case-insensitive.
+  dataTables: []

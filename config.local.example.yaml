@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# config.local.example.yaml — starting point for your config.local.yaml
+# ---------------------------------------------------------------------------
+#   cp config.local.example.yaml config.local.yaml     # then edit it
+#
+# config.local.yaml is gitignored: it holds your own settings and is never
+# committed, so pulling new versions of the repo does not touch it. Set only
+# what you want to change — every other key keeps its value from
+# config.defaults.yaml, which documents all settings and their defaults.
+# Remove any section below that you do not need.
+# ---------------------------------------------------------------------------
+
+# container:
+#   engine: podman              # default: docker
+
+catalog:
+  # Replaces the default operator tags as a whole: list every tag you want.
+  operators:
+    v9-261105-amd64:
+      manage: [9.2.x, 9.1.x]    # Manage versions -> SMP + Graphite apps
+      core: [9.2.x, 9.1.x]      # MAS core versions -> Graphite @maximo framework
+
+masManage:
+  export: false                 # true runs step 5 (DB schema / data export)
+  database:
+    host: db.example.com
+    port: 50000
+    type: db2                   # mssql | db2 | oracle
+    name: maxdb
+    schema: maximo
+    username: maximo
+    # The password defaults to env:MAS_DB_PASSWORD — set it in the gitignored
+    # secrets.env (cp secrets.env.example secrets.env), not here.
+  # schemaTables: [WORKORDER, ASSET, LOCATIONS]   # default "*" (all)
+  # dataTables: [MAXRELATIONSHIP]                 # default [] (DDL only)

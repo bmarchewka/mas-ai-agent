@@ -2,110 +2,137 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# mas-manage-SMP-extract.sh — Mirror /opt/IBM/SMP/ from the manageadmin container
+# mas-manage-SMP-extract.sh — Mirror /opt/IBM/SMP/ from the manageadmin image
+# of every resolved Manage version into MANAGE/<tag>/manage-<version>/SMP/
 # ---------------------------------------------------------------------------
-# Copies the SMP tree verbatim into MANAGE/SMP/. Files — including compiled
-# .class files — are kept exactly as shipped in the image; nothing is
-# transformed.
+# For each operator tag and each Manage version resolved by step 2
+# (status.operators.<tag>.manage.<version>.manageadmin in MANAGE/status.yaml), copies the SMP tree
+# verbatim. Files — including compiled .class files — are kept exactly as
+# shipped in the image; nothing is transformed. The folder is cleared first,
+# so it is an exact mirror of that image.
 #
+# If another folder was already extracted from the very same manageadmin image
+# (same digest — e.g. the same Manage version in two catalogs), the tree is
+# copied locally from there instead of from a container.
+#
+# Each MANAGE/<tag>/manage-<version>/ also gets an images.yaml manifest.
+#
+# Usage: mas-manage-SMP-extract.sh [--tag <operatorTag>]... [--version <version>]...
+# ---------------------------------------------------------------------------
 # Prerequisites:
-#   - Docker
+#   - Container engine (docker | podman)
+#   - yq (mikefarah) or python3, for reading the config files
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG="${REPO_ROOT}/config.yaml"
-OUTPUT_DIR="${REPO_ROOT}/MANAGE/SMP"
+# shellcheck source=scripts/config-lib.sh
+source "${SCRIPT_DIR}/config-lib.sh"
+config_init || exit 1     # config.local.yaml over config.defaults.yaml -> CONFIG
 
-# Container engine (docker | podman) chosen by container.engine in config.yaml.
+# Container engine (docker | podman) chosen by container.engine.
 # shellcheck source=scripts/container-runtime.sh
 source "${SCRIPT_DIR}/container-runtime.sh"
 CONTAINER_ENGINE="$(resolve_container_engine "${CONFIG}")" || exit 1
 
+# Parent run: loop over (tag, Manage version) and print the combined summary.
+run_units "${BASH_SOURCE[0]}" manage "$@"
+if [[ -z "${MAS_CHILD_TAG:-}" ]]; then
+  print_run_summary
+  exit "${RUN_RC}"
+fi
+
 # ---------------------------------------------------------------------------
-# 1. Parse image reference from config.yaml
+# Child run: one (tag, Manage version)
 # ---------------------------------------------------------------------------
-parse_image() {
-  if command -v yq &>/dev/null; then
-    yq '.status.manageadmin' "${CONFIG}"
-  elif command -v python3 &>/dev/null; then
-    python3 - "${CONFIG}" <<'EOF'
-import sys, re
+TAG="${MAS_CHILD_TAG}"
+VERSION="${MAS_CHILD_VERSION}"
+UNIT_DIR="$(unit_dir "${REPO_ROOT}" "${TAG}" manage "${VERSION}")"
+UNIT_REL="${UNIT_DIR#"${REPO_ROOT}/"}"
+OUTPUT_DIR="${UNIT_DIR}/SMP"
+MARKER="${UNIT_DIR}/.smp-source"
 
-with open(sys.argv[1]) as f:
-    lines = f.readlines()
-
-in_status = False
-for line in lines:
-    if re.match(r'^status\s*:', line):
-        in_status = True
-        continue
-    if in_status:
-        # Stop at next top-level key
-        if re.match(r'^\S', line) and not re.match(r'^\s', line):
-            break
-        m = re.match(r'^\s+manageadmin:\s*(.+)$', line)
-        if m:
-            val = m.group(1).strip().strip('"')
-            if val:
-                print(val)
-                sys.exit(0)
-
-sys.exit("ERROR: could not parse status.manageadmin from config.yaml")
-EOF
-  else
-    # grep/awk fallback — match the resolved image registry (cp.icr.io)
-    grep -A5 '^status:' "${CONFIG}" \
-      | grep 'manageadmin:' \
-      | awk -F': ' '{print $2}' \
-      | awk '{print $1}'
-  fi
-}
-
-IMAGE="$(parse_image)"
+# ---------------------------------------------------------------------------
+# 1. Image reference from status.operators.<tag>.manage.<version>.manageadmin
+# ---------------------------------------------------------------------------
+IMAGE="$(status_field "${TAG}" manage "${VERSION}" manageadmin)"
 if [[ -z "${IMAGE}" ]]; then
-  echo "ERROR: could not read status.manageadmin from ${CONFIG}. Run scripts/mas-manage-resolve-image.sh first." >&2
+  echo "ERROR: status.operators.${TAG}.manage.${VERSION}.manageadmin is not set in MANAGE/status.yaml." >&2
+  echo "       Run scripts/mas-manage-resolve-image.sh first." >&2
   exit 1
 fi
-
 echo "Image: ${IMAGE}"
+result "Image" "${IMAGE}"
 
 # ---------------------------------------------------------------------------
-# 2. Create or reuse named container
+# 2. Look for another folder already extracted from the same image
 # ---------------------------------------------------------------------------
-# Derive version from the image tag (everything after the last ':')
-IMAGE_TAG="${IMAGE##*:}"
-CONTAINER_NAME="mas-manageadmin-${IMAGE_TAG}"
+REUSE_FROM=""
+for other_marker in "${REPO_ROOT}"/MANAGE/*/manage-*/.smp-source; do
+  [[ -f "${other_marker}" ]] || continue
+  other_dir="$(dirname "${other_marker}")"
+  [[ "${other_dir}" == "${UNIT_DIR}" ]] && continue
+  if [[ -d "${other_dir}/SMP" && "$(cat "${other_marker}")" == "${IMAGE}" ]]; then
+    REUSE_FROM="${other_dir}"
+    break
+  fi
+done
 
-if "${CONTAINER_ENGINE}" inspect --type container "${CONTAINER_NAME}" &>/dev/null; then
-  echo "Reusing existing container: ${CONTAINER_NAME}"
-else
-  echo "Creating container from ${IMAGE} ..."
-  "${CONTAINER_ENGINE}" create --name "${CONTAINER_NAME}" "${IMAGE}"
-  echo "Container: ${CONTAINER_NAME}"
-fi
-
 # ---------------------------------------------------------------------------
-# 3. Copy entire /opt/IBM/SMP/ from container → MANAGE/SMP/
+# 3. Copy /opt/IBM/SMP/ → MANAGE/<tag>/manage-<version>/SMP/ (fresh mirror)
 # ---------------------------------------------------------------------------
+rm -f "${MARKER}"
+rm -rf "${OUTPUT_DIR}"
 mkdir -p "${OUTPUT_DIR}"
-echo "Copying /opt/IBM/SMP/ from container (this may take a while) ..."
-"${CONTAINER_ENGINE}" cp "${CONTAINER_NAME}:/opt/IBM/SMP/." "${OUTPUT_DIR}/"
+
+if [[ -n "${REUSE_FROM}" ]]; then
+  echo "Same manageadmin image already extracted in ${REUSE_FROM#"${REPO_ROOT}/"} — copying locally ..."
+  cp -Rp "${REUSE_FROM}/SMP/." "${OUTPUT_DIR}/"
+  CONTAINER_LABEL="(copied from ${REUSE_FROM#"${REPO_ROOT}/"}/SMP)"
+else
+  # Container named after the image tag/digest (everything after the last ':').
+  IMAGE_TAG="${IMAGE##*:}"
+  CONTAINER_NAME="mas-manageadmin-${IMAGE_TAG}"
+  if "${CONTAINER_ENGINE}" inspect --type container "${CONTAINER_NAME}" &>/dev/null; then
+    echo "Reusing existing container: ${CONTAINER_NAME}"
+  else
+    echo "Creating container from ${IMAGE} ..."
+    "${CONTAINER_ENGINE}" create --name "${CONTAINER_NAME}" "${IMAGE}"
+    echo "Container: ${CONTAINER_NAME}"
+  fi
+  echo "Copying /opt/IBM/SMP/ from container (this may take a while) ..."
+  "${CONTAINER_ENGINE}" cp "${CONTAINER_NAME}:/opt/IBM/SMP/." "${OUTPUT_DIR}/"
+  CONTAINER_LABEL="${CONTAINER_NAME}"
+fi
 echo "Copy complete."
+printf '%s\n' "${IMAGE}" > "${MARKER}"
 
 # ---------------------------------------------------------------------------
-# 4. Summary
+# 4. Manifest: MANAGE/<tag>/manage-<version>/images.yaml
+# ---------------------------------------------------------------------------
+cat > "${UNIT_DIR}/images.yaml" <<EOF
+# Generated by mas-agent — what this folder was extracted from.
+operatorTag: "${TAG}"
+catalogImage: "$(status_get "${TAG}" catalogImage)"
+package: ibm-mas-manage
+version: "${VERSION}"
+requested: "$(status_field "${TAG}" manage "${VERSION}" requested)"
+channel: "$(status_field "${TAG}" manage "${VERSION}" channel)"
+bundle: "$(status_field "${TAG}" manage "${VERSION}" bundle)"
+source: "$(status_field "${TAG}" manage "${VERSION}" source)"
+manageadmin: "${IMAGE}"
+EOF
+
+# ---------------------------------------------------------------------------
+# 5. Summary
 # ---------------------------------------------------------------------------
 CLASS_COUNT="$(find "${OUTPUT_DIR}" -name "*.class" 2>/dev/null | wc -l | tr -d ' ')"
 FILE_COUNT="$(find "${OUTPUT_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
 
-echo ""
-echo "Done. ${FILE_COUNT} total files in MANAGE/SMP/ (${CLASS_COUNT} .class files kept as-is)."
-echo ""
-echo "| Metric      | Value |"
-echo "|-------------|-------|"
-echo "| Image       | ${IMAGE} |"
-echo "| Container   | ${CONTAINER_NAME} |"
-echo "| Class files | ${CLASS_COUNT} |"
-echo "| Total files | ${FILE_COUNT} |"
+echo "Done. ${FILE_COUNT} total files in ${UNIT_REL}/SMP/ (${CLASS_COUNT} .class files kept as-is)."
+
+result "Container"        "${CONTAINER_LABEL}"
+result "Class files"      "${CLASS_COUNT}"
+result "Total files"      "${FILE_COUNT}"
+result "Output directory" "${UNIT_REL}/SMP/"
